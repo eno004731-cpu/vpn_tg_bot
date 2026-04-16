@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from datetime import timedelta
 from decimal import Decimal
@@ -26,6 +27,12 @@ class InvoiceView:
     reference_code: str
     plan_title: str
     expires_at: str
+
+
+@dataclass(frozen=True)
+class StarsPayload:
+    plan_code: str
+    user_tg_id: int
 
 
 def reserve_unique_amount(base_amount: Decimal, used_kopecks: set[int], seed: int) -> Decimal:
@@ -72,6 +79,47 @@ async def create_invoice(
 
     await session.commit()
     await session.refresh(invoice)
+    return invoice
+
+
+def build_stars_payload(plan_code: str, user_tg_id: int) -> str:
+    return f"stars:{plan_code}:{user_tg_id}"
+
+
+def parse_stars_payload(payload: str) -> StarsPayload:
+    prefix, plan_code, user_tg_id_raw = payload.split(":", maxsplit=2)
+    if prefix != "stars" or not plan_code or not user_tg_id_raw.isdigit():
+        raise ValueError("Некорректный payload Stars.")
+    return StarsPayload(plan_code=plan_code, user_tg_id=int(user_tg_id_raw))
+
+
+def build_stars_reference(telegram_payment_charge_id: str) -> str:
+    digest = hashlib.sha256(telegram_payment_charge_id.encode()).hexdigest()[:24]
+    return f"XTR-{digest}"
+
+
+async def create_stars_invoice_record(
+    session: AsyncSession,
+    user: User,
+    plan: PlanDefinition,
+    telegram_payment_charge_id: str,
+    total_stars: int,
+) -> Invoice:
+    now = utc_now()
+    invoice = Invoice(
+        user_id=user.id,
+        plan_code=plan.code,
+        plan_title=plan.title,
+        duration_days=plan.duration_days,
+        traffic_limit_bytes=plan.traffic_limit_bytes,
+        amount_rub=Decimal(total_stars),
+        amount_kopecks=total_stars,
+        reference_code=build_stars_reference(telegram_payment_charge_id),
+        status=InvoiceStatus.awaiting_transfer.value,
+        expires_at=now + timedelta(minutes=15),
+    )
+    session.add(invoice)
+    await session.flush()
     return invoice
 
 

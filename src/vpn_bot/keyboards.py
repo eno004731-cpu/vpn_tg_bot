@@ -10,6 +10,11 @@ class PlanChoice(CallbackData, prefix="plan"):
     code: str
 
 
+class PaymentMethodChoice(CallbackData, prefix="pay_method"):
+    code: str
+    method: str
+
+
 class InvoiceAction(CallbackData, prefix="invoice"):
     action: str
     invoice_id: int
@@ -31,15 +36,46 @@ def main_menu() -> ReplyKeyboardMarkup:
 
 
 def plans_keyboard(plans: list[PlanDefinition]) -> InlineKeyboardMarkup:
+    def plan_price_label(plan: PlanDefinition) -> str:
+        prices = []
+        if plan.supports_transfer:
+            prices.append(f"{plan.price_rub} ₽")
+        if plan.supports_stars:
+            prices.append(f"{plan.price_stars} ⭐")
+        return " / ".join(prices) if prices else "недоступен"
+
     rows = [
         [
             InlineKeyboardButton(
-                text=f"{plan.title} - {plan.price_rub} ₽",
+                text=f"{plan.title} - {plan_price_label(plan)}",
                 callback_data=PlanChoice(code=plan.code).pack(),
             )
         ]
         for plan in plans
     ]
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def payment_methods_keyboard(plan: PlanDefinition) -> InlineKeyboardMarkup:
+    rows = []
+    if plan.supports_transfer:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="Перевод на карту / СБП",
+                    callback_data=PaymentMethodChoice(code=plan.code, method="transfer").pack(),
+                )
+            ]
+        )
+    if plan.supports_stars:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=f"Оплатить Stars: {plan.price_stars} ⭐",
+                    callback_data=PaymentMethodChoice(code=plan.code, method="stars").pack(),
+                )
+            ]
+        )
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 

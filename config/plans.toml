@@ -2,6 +2,7 @@
 code = "starter"
 title = "30 дней / 200 ГБ"
 price_rub = "299.00"
+price_stars = 299
 duration_days = 30
 traffic_limit_gb = 200
 description = "Базовый тариф на один месяц."
@@ -10,6 +11,7 @@ description = "Базовый тариф на один месяц."
 code = "plus"
 title = "90 дней / 700 ГБ"
 price_rub = "799.00"
+price_stars = 799
 duration_days = 90
 traffic_limit_gb = 700
 description = "Оптимально для постоянного использования."
@@ -18,7 +20,17 @@ description = "Оптимально для постоянного использ
 code = "max"
 title = "180 дней / 1600 ГБ"
 price_rub = "1499.00"
+price_stars = 1499
 duration_days = 180
 traffic_limit_gb = 1600
 description = "Полугодовой тариф с большим запасом трафика."
 
+[[plans]]
+code = "stars_test"
+title = "Тест оплаты Stars"
+price_rub = "0.00"
+price_stars = 1
+duration_days = 0
+traffic_limit_gb = 0
+description = "Проверка оплаты Telegram Stars. VPN-доступ не выдаётся."
+provision_access = false

@@ -70,10 +70,20 @@ class PlanDefinition:
     duration_days: int
     traffic_limit_gb: int
     description: Optional[str] = None
+    price_stars: Optional[int] = None
+    provision_access: bool = True
 
     @property
     def traffic_limit_bytes(self) -> int:
         return self.traffic_limit_gb * 1024 * 1024 * 1024
+
+    @property
+    def supports_transfer(self) -> bool:
+        return self.provision_access and self.price_rub > Decimal("0.00")
+
+    @property
+    def supports_stars(self) -> bool:
+        return self.price_stars is not None and self.price_stars > 0
 
 
 def _read_toml(path: Path) -> dict[str, Any]:
@@ -210,6 +220,8 @@ def load_plans(path: Optional[Path] = None) -> dict[str, PlanDefinition]:
             duration_days=int(item["duration_days"]),
             traffic_limit_gb=int(item["traffic_limit_gb"]),
             description=item.get("description"),
+            price_stars=int(item["price_stars"]) if item.get("price_stars") is not None else None,
+            provision_access=bool(item.get("provision_access", True)),
         )
         plans[plan.code] = plan
     if not plans:
