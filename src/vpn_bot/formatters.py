@@ -52,6 +52,23 @@ def format_admin_dashboard(pending_invoices: int, active_subscriptions: int) -> 
             "<b>Админ-панель</b>",
             f"Платежей на проверке: <code>{pending_invoices}</code>",
             f"Активных подписок: <code>{active_subscriptions}</code>",
+            "",
+            "Команды: /admin help",
+        ]
+    )
+
+
+def format_admin_help() -> str:
+    return "\n".join(
+        [
+            "<b>Админ-команды</b>",
+            "/admin - сводка по платежам и активным подпискам",
+            "/admin help - показать эту подсказку",
+            "/traffic_admin - показать пользователей и расход трафика",
+            "/approve &lt;invoice_id&gt; - подтвердить оплату",
+            "/reject &lt;invoice_id&gt; [причина] - отклонить оплату",
+            "",
+            "Инвойсы также можно подтверждать кнопками в сообщении о платеже.",
         ]
     )
 

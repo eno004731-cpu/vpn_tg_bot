@@ -2,6 +2,7 @@ from datetime import timedelta
 from decimal import Decimal
 
 from vpn_bot.config import PaymentSettings
+from vpn_bot.formatters import format_admin_help
 from vpn_bot.models import Invoice
 from vpn_bot.services.payments import format_invoice_for_user
 from vpn_bot.utils import utc_now
@@ -36,3 +37,12 @@ def test_invoice_formatting_shows_full_card_and_phone() -> None:
     assert "+10000000000" in text
     assert "0000 0000 0000 0000" in text
     assert "VPN-000001" in text
+
+
+def test_admin_help_lists_commands() -> None:
+    text = format_admin_help()
+
+    assert "/admin help" in text
+    assert "/traffic_admin" in text
+    assert "/approve &lt;invoice_id&gt;" in text
+    assert "/reject &lt;invoice_id&gt; [причина]" in text

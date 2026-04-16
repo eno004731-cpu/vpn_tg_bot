@@ -12,6 +12,7 @@ from sqlalchemy import func, select
 
 from vpn_bot.formatters import (
     format_admin_dashboard,
+    format_admin_help,
     format_admin_traffic_report,
     format_invoice_rejection,
 )
@@ -32,9 +33,17 @@ def _is_admin(message_or_callback: Union[Message, CallbackQuery], admin_ids: tup
 
 
 @router.message(Command("admin"))
-async def admin_dashboard(message: Message, app_context: AppContext) -> None:
+async def admin_dashboard(message: Message, command: CommandObject, app_context: AppContext) -> None:
     if not _is_admin(message, app_context.settings.app.admin_ids):
         return
+    admin_args = (command.args or "").strip().lower()
+    if admin_args in {"help", "commands", "команды"}:
+        await message.answer(format_admin_help())
+        return
+    if admin_args:
+        await message.answer("Неизвестная админ-команда. Использование: /admin help")
+        return
+
     async with app_context.session_factory() as session:
         await ensure_user(session, message.from_user, app_context.settings.app.admin_ids)
         pending_count = await session.scalar(
