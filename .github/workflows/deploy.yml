@@ -46,8 +46,11 @@ jobs:
           set -euo pipefail
 
           if [ ! -d "$APP_DIR/.git" ]; then
-            sudo mkdir -p "$APP_DIR"
-            sudo chown -R "$USER:$USER" "$APP_DIR"
+            if [ ! -w "$(dirname "$APP_DIR")" ] && [ ! -w "$APP_DIR" ]; then
+              echo "::error::$APP_DIR is not writable by $USER. Create it once on the server and chown it to github-runner."
+              exit 1
+            fi
+            mkdir -p "$APP_DIR"
             git clone "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git" "$APP_DIR"
           fi
 
@@ -68,8 +71,8 @@ jobs:
       - name: Restart bot service
         run: |
           set -euo pipefail
-          sudo systemctl restart "$SERVICE_NAME"
-          sudo systemctl status "$SERVICE_NAME" --no-pager
+          sudo -n systemctl restart "$SERVICE_NAME"
+          sudo -n systemctl status "$SERVICE_NAME" --no-pager
 
       - name: Deployment summary
         run: |

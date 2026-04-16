@@ -153,5 +153,5 @@ sudo visudo -f /etc/sudoers.d/github-runner-vpn-bot
 ```
 
 ```text
-github-runner ALL=(root) NOPASSWD: /bin/systemctl restart vpn-bot, /bin/systemctl status vpn-bot, /usr/bin/systemctl restart vpn-bot, /usr/bin/systemctl status vpn-bot
+github-runner ALL=(root) NOPASSWD: /usr/bin/systemctl restart vpn-bot, /usr/bin/systemctl status vpn-bot --no-pager, /bin/systemctl restart vpn-bot, /bin/systemctl status vpn-bot --no-pager
 ```
