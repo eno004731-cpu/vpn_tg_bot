@@ -1,0 +1,2 @@
+"""VPN subscription bot."""
+

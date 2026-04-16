@@ -1,0 +1,9 @@
+services:
+  vpn-bot:
+    build: .
+    restart: unless-stopped
+    volumes:
+      - ./data:/app/data
+      - ./secrets:/app/secrets:ro
+    command: ["vpn-bot", "run"]
+
