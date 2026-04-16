@@ -84,13 +84,20 @@ class XUIClient:
     async def _ensure_login(self) -> None:
         if self._logged_in:
             return
-        response = await self._http_request(
-            "POST",
-            "login",
-            data={"username": self.settings.username, "password": self.settings.password},
-        )
-        response.raise_for_status()
-        self._logged_in = True
+        credentials = {"username": self.settings.username, "password": self.settings.password}
+        errors: list[str] = []
+        for kwargs in ({"data": credentials}, {"json": credentials}):
+            response = await self._http_request("POST", "login", **kwargs)
+            response.raise_for_status()
+            try:
+                payload = response.json()
+            except json.JSONDecodeError:
+                payload = {}
+            if not isinstance(payload, dict) or payload.get("success") is not False:
+                self._logged_in = True
+                return
+            errors.append(payload.get("msg") or payload.get("message") or "неверный логин или пароль")
+        raise XUIError("Не удалось войти в 3x-ui: " + "; ".join(errors))
 
     async def _request(
         self,

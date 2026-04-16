@@ -2,9 +2,10 @@ import json
 from datetime import datetime, timezone
 
 import httpx
+import pytest
 
 from vpn_bot.config import XUISettings
-from vpn_bot.services.xui import XUIClient
+from vpn_bot.services.xui import XUIClient, XUIError
 
 
 def make_settings() -> XUISettings:
@@ -142,5 +143,24 @@ async def test_add_client_uses_modern_api_and_serializes_settings() -> None:
     assert settings["clients"][0]["id"] == "uuid-1"
     assert settings["clients"][0]["flow"] == "xtls-rprx-vision"
     assert settings["clients"][0]["email"] == "tg1@vpn.local"
+
+    await client.close()
+
+
+async def test_login_rejects_success_false_response() -> None:
+    client = XUIClient(make_settings())
+
+    async def fake_http_request(method, path, **kwargs):
+        request = httpx.Request(method, f"https://panel.example.com/secret/{path}")
+        return httpx.Response(
+            200,
+            json={"success": False, "msg": "Неверные данные учетной записи.", "obj": None},
+            request=request,
+        )
+
+    client._http_request = fake_http_request
+
+    with pytest.raises(XUIError, match="Не удалось войти"):
+        await client.list_inbounds()
 
     await client.close()
