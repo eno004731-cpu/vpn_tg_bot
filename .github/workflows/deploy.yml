@@ -45,18 +45,30 @@ jobs:
         run: |
           set -euo pipefail
 
-          if [ ! -d "$APP_DIR/.git" ]; then
-            if [ ! -w "$(dirname "$APP_DIR")" ] && [ ! -w "$APP_DIR" ]; then
-              echo "::error::$APP_DIR is not writable by $USER. Create it once on the server and chown it to github-runner."
+          if [ ! -d "$APP_DIR" ]; then
+            if [ ! -w "$(dirname "$APP_DIR")" ]; then
+              echo "::error::$(dirname "$APP_DIR") is not writable by $USER. Create $APP_DIR once on the server and chown it to github-runner."
               exit 1
             fi
             mkdir -p "$APP_DIR"
-            git clone "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git" "$APP_DIR"
+          fi
+
+          if [ ! -w "$APP_DIR" ]; then
+            echo "::error::$APP_DIR is not writable by $USER. Run: chown -R github-runner:github-runner $APP_DIR"
+            exit 1
           fi
 
           cd "$APP_DIR"
+
+          if [ ! -d .git ]; then
+            git init
+            git remote add origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git"
+          else
+            git remote set-url origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git"
+          fi
+
           git fetch --prune origin main
-          git checkout main
+          git checkout -B main origin/main
           git reset --hard "$GITHUB_SHA"
 
       - name: Install app and migrate database
