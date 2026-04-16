@@ -17,6 +17,16 @@ class XUIError(RuntimeError):
     """Raised when the 3x-ui API returns an error."""
 
 
+INBOUND_LIST_PATHS = (
+    "panel/api/inbounds/list",
+    "panel/inbound/list",
+)
+ADD_CLIENT_PATHS = (
+    "panel/api/inbounds/addClient",
+    "panel/inbound/addClient",
+)
+
+
 @dataclass(frozen=True)
 class TrafficSnapshot:
     email: str
@@ -105,8 +115,28 @@ class XUIClient:
             raise XUIError(payload.get("msg") or payload.get("message") or "3x-ui returned error")
         return payload
 
+    async def _request_with_fallback(
+        self,
+        method: str,
+        paths: tuple[str, ...],
+        *,
+        json_data: Optional[dict[str, Any]] = None,
+        data: Optional[dict[str, Any]] = None,
+    ) -> dict[str, Any]:
+        last_not_found: Optional[httpx.HTTPStatusError] = None
+        for path in paths:
+            try:
+                return await self._request(method, path, json_data=json_data, data=data)
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code != 404:
+                    raise
+                last_not_found = exc
+        raise XUIError(
+            f"Не найден API 3x-ui. Проверьте версию панели и webBasePath. Пробовал пути: {', '.join(paths)}"
+        ) from last_not_found
+
     async def list_inbounds(self) -> list[dict[str, Any]]:
-        payload = await self._request("GET", "panel/inbound/list")
+        payload = await self._request_with_fallback("GET", INBOUND_LIST_PATHS)
         items = payload.get("obj") or payload.get("data") or []
         return [self._normalize_inbound(item) for item in items]
 
@@ -129,27 +159,28 @@ class XUIClient:
         comment: str,
     ) -> ProvisionedClient:
         inbound = await self.get_inbound(inbound_id)
-        payload = {
-            "id": str(inbound_id),
-            "settings": {
-                "clients": [
-                    {
-                        "id": client_id,
-                        "flow": flow,
-                        "email": email,
-                        "limitIp": 2,
-                        "totalGB": traffic_limit_bytes,
-                        "expiryTime": int(expires_at.timestamp() * 1000),
-                        "enable": True,
-                        "tgId": str(telegram_user_id),
-                        "subId": self.generate_sub_id(),
-                        "comment": comment,
-                        "reset": 0,
-                    }
-                ]
-            },
+        client_settings = {
+            "clients": [
+                {
+                    "id": client_id,
+                    "flow": flow,
+                    "email": email,
+                    "limitIp": 2,
+                    "totalGB": traffic_limit_bytes,
+                    "expiryTime": int(expires_at.timestamp() * 1000),
+                    "enable": True,
+                    "tgId": str(telegram_user_id),
+                    "subId": self.generate_sub_id(),
+                    "comment": comment,
+                    "reset": 0,
+                }
+            ]
         }
-        await self._request("POST", "panel/inbound/addClient", json_data=payload)
+        payload = {
+            "id": inbound_id,
+            "settings": json.dumps(client_settings),
+        }
+        await self._request_with_fallback("POST", ADD_CLIENT_PATHS, json_data=payload)
         access_url = self.build_vless_reality_link(inbound, client_id=client_id, email=email)
         return ProvisionedClient(client_id=client_id, email=email, access_url=access_url)
 
