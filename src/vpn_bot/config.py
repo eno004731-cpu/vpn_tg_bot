@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
 from typing import Any, Optional, Tuple
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 try:
     import tomllib
@@ -40,6 +41,18 @@ class PaymentSettings:
 
 
 @dataclass
+class TrafficPolicySettings:
+    enabled: bool = True
+    daily_limit_gb: int = 75
+    throttled_speed_kbytes_per_second: int = 1250
+    timezone: str = "Europe/Moscow"
+
+    @property
+    def daily_limit_bytes(self) -> int:
+        return self.daily_limit_gb * 1024 * 1024 * 1024
+
+
+@dataclass
 class XUISettings:
     base_url: str
     username: str
@@ -57,6 +70,7 @@ class XUISettings:
 class Settings:
     app: AppSettings
     payment: PaymentSettings
+    traffic_policy: TrafficPolicySettings
     xui: XUISettings
     secrets_file: Path
     plans_file: Path
@@ -130,6 +144,7 @@ def load_settings() -> Settings:
     raw = _read_toml(secrets_file)
     app = raw.get("app", {})
     payment = raw.get("payment", {})
+    traffic_policy = raw.get("traffic_policy", {})
     xui = raw.get("xui", {})
 
     bot_token = _coalesce(os.getenv("VPN_BOT_TOKEN"), app.get("bot_token"))
@@ -163,6 +178,16 @@ def load_settings() -> Settings:
     if missing:
         raise ConfigError("Не заполнены обязательные секреты: " + ", ".join(sorted(missing)))
 
+    traffic_policy_timezone = _coalesce(
+        os.getenv("VPN_BOT_TRAFFIC_POLICY_TIMEZONE"),
+        traffic_policy.get("timezone"),
+        default="Europe/Moscow",
+    )
+    try:
+        ZoneInfo(traffic_policy_timezone)
+    except ZoneInfoNotFoundError as exc:
+        raise ConfigError(f"Неизвестная timezone для traffic_policy: {traffic_policy_timezone}") from exc
+
     return Settings(
         app=AppSettings(
             bot_token=bot_token,
@@ -183,6 +208,30 @@ def load_settings() -> Settings:
                 default=12,
             ),
             instruction_hint=_coalesce(os.getenv("VPN_BOT_INSTRUCTION_HINT"), payment.get("instruction_hint")),
+        ),
+        traffic_policy=TrafficPolicySettings(
+            enabled=bool(
+                _coalesce(
+                    _env_bool("VPN_BOT_TRAFFIC_POLICY_ENABLED"),
+                    traffic_policy.get("enabled"),
+                    default=True,
+                )
+            ),
+            daily_limit_gb=int(
+                _coalesce(
+                    _env_int("VPN_BOT_DAILY_LIMIT_GB"),
+                    traffic_policy.get("daily_limit_gb"),
+                    default=75,
+                )
+            ),
+            throttled_speed_kbytes_per_second=int(
+                _coalesce(
+                    _env_int("VPN_BOT_THROTTLED_SPEED_KB_PER_SEC"),
+                    traffic_policy.get("throttled_speed_kbytes_per_second"),
+                    default=1250,
+                )
+            ),
+            timezone=traffic_policy_timezone,
         ),
         xui=XUISettings(
             base_url=xui_base_url,

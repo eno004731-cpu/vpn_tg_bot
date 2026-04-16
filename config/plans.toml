@@ -1,8 +1,8 @@
 [[plans]]
 code = "starter"
 title = "30 дней / 200 ГБ"
-price_rub = "299.00"
-price_stars = 299
+price_rub = "100.00"
+price_stars = 100
 duration_days = 30
 traffic_limit_gb = 200
 description = "Базовый тариф на один месяц."
@@ -10,8 +10,8 @@ description = "Базовый тариф на один месяц."
 [[plans]]
 code = "plus"
 title = "90 дней / 700 ГБ"
-price_rub = "799.00"
-price_stars = 799
+price_rub = "270.00"
+price_stars = 270
 duration_days = 90
 traffic_limit_gb = 700
 description = "Оптимально для постоянного использования."
@@ -19,8 +19,8 @@ description = "Оптимально для постоянного использ
 [[plans]]
 code = "max"
 title = "180 дней / 1600 ГБ"
-price_rub = "1499.00"
-price_stars = 1499
+price_rub = "500.00"
+price_stars = 500
 duration_days = 180
 traffic_limit_gb = 1600
 description = "Полугодовой тариф с большим запасом трафика."

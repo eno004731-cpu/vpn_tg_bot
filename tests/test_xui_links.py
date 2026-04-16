@@ -21,13 +21,32 @@ def make_settings() -> XUISettings:
 
 def make_reality_inbound() -> dict:
     return {
+        "id": 1,
+        "settings": {
+            "clients": [
+                {
+                    "id": "uuid-1",
+                    "email": "tg1@vpn.local",
+                    "flow": "xtls-rprx-vision",
+                    "limitIp": 2,
+                    "totalGB": 1024,
+                    "expiryTime": 0,
+                    "enable": True,
+                    "speedLimit": 0,
+                    "tgId": "123",
+                    "subId": "subid",
+                    "comment": "test",
+                    "reset": 0,
+                }
+            ]
+        },
         "streamSettings": {
             "realitySettings": {
                 "settings": {"publicKey": "PUBLIC_KEY"},
                 "serverNames": ["www.cloudflare.com"],
                 "shortIds": ["abcd1234"],
             }
-        }
+        },
     }
 
 
@@ -143,6 +162,39 @@ async def test_add_client_uses_modern_api_and_serializes_settings() -> None:
     assert settings["clients"][0]["id"] == "uuid-1"
     assert settings["clients"][0]["flow"] == "xtls-rprx-vision"
     assert settings["clients"][0]["email"] == "tg1@vpn.local"
+    assert settings["clients"][0]["speedLimit"] == 0
+
+    await client.close()
+
+
+async def test_update_client_speed_limit_uses_update_endpoint() -> None:
+    client = XUIClient(make_settings())
+    requests = []
+
+    async def fake_get_inbound(inbound_id):
+        assert inbound_id == 1
+        return make_reality_inbound()
+
+    async def fake_request(method, path, *, json_data=None, data=None):
+        requests.append((method, path, json_data))
+        return {"success": True}
+
+    client.get_inbound = fake_get_inbound
+    client._request = fake_request
+
+    await client.update_client_speed_limit(
+        1,
+        client_id="uuid-1",
+        speed_limit_kbytes_per_second=1250,
+    )
+
+    method, path, payload = requests[0]
+    assert method == "POST"
+    assert path == "panel/api/inbounds/updateClient/uuid-1"
+    settings = json.loads(payload["settings"])
+    assert settings["clients"][0]["id"] == "uuid-1"
+    assert settings["clients"][0]["email"] == "tg1@vpn.local"
+    assert settings["clients"][0]["speedLimit"] == 1250
 
     await client.close()
 

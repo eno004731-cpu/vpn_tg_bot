@@ -62,7 +62,7 @@ async def traffic_admin(message: Message, app_context: AppContext) -> None:
         return
     async with app_context.session_factory() as session:
         await ensure_user(session, message.from_user, app_context.settings.app.admin_ids)
-        subscriptions = await sync_active_subscriptions(session, app_context.panel)
+        subscriptions = await sync_active_subscriptions(session, app_context.panel, app_context.settings)
         await session.commit()
     await message.answer(format_admin_traffic_report(subscriptions))
 

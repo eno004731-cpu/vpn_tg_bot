@@ -3,14 +3,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Iterable
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from vpn_bot.config import Settings
+from vpn_bot.config import Settings, TrafficPolicySettings
 from vpn_bot.models import Invoice, InvoiceStatus, Subscription, SubscriptionStatus, User
-from vpn_bot.services.xui import XUIClient
+from vpn_bot.services.xui import TrafficSnapshot, XUIClient
 from vpn_bot.utils import ensure_utc, utc_now
 
 
@@ -78,7 +79,11 @@ async def activate_invoice(
     return ActivationResult(invoice=invoice, subscription=subscription, user=invoice.user)
 
 
-async def sync_active_subscriptions(session: AsyncSession, panel: XUIClient) -> list[Subscription]:
+async def sync_active_subscriptions(
+    session: AsyncSession,
+    panel: XUIClient,
+    settings: Settings | None = None,
+) -> list[Subscription]:
     subscriptions = list(
         await session.scalars(
             select(Subscription)
@@ -101,6 +106,8 @@ async def sync_active_subscriptions(session: AsyncSession, panel: XUIClient) -> 
             subscription.traffic_used_bytes = snapshot.total_bytes
             subscription.last_synced_at = now
             changed = True
+            if settings is not None and await _apply_daily_traffic_policy(subscription, snapshot, panel, settings):
+                changed = True
         if (
             ensure_utc(subscription.ends_at) <= now
             or subscription.traffic_used_bytes >= subscription.traffic_limit_bytes
@@ -112,6 +119,45 @@ async def sync_active_subscriptions(session: AsyncSession, panel: XUIClient) -> 
     if changed:
         await session.commit()
     return subscriptions
+
+
+async def _apply_daily_traffic_policy(
+    subscription: Subscription,
+    snapshot: TrafficSnapshot,
+    panel: XUIClient,
+    settings: Settings,
+) -> bool:
+    policy = settings.traffic_policy
+    if not policy.enabled:
+        return False
+
+    changed = _refresh_daily_baseline(subscription, snapshot, policy)
+    daily_used_bytes = max(snapshot.total_bytes - subscription.daily_baseline_bytes, 0)
+    target_speed_limit = policy.throttled_speed_kbytes_per_second if daily_used_bytes >= policy.daily_limit_bytes else 0
+
+    if subscription.speed_limit_kbytes_per_second == target_speed_limit:
+        return changed
+
+    await panel.update_client_speed_limit(
+        settings.xui.inbound_id,
+        client_id=subscription.xui_client_id,
+        speed_limit_kbytes_per_second=target_speed_limit,
+    )
+    subscription.speed_limit_kbytes_per_second = target_speed_limit
+    return True
+
+
+def _refresh_daily_baseline(
+    subscription: Subscription,
+    snapshot: TrafficSnapshot,
+    policy: TrafficPolicySettings,
+) -> bool:
+    today = utc_now().astimezone(ZoneInfo(policy.timezone)).date().isoformat()
+    if subscription.daily_traffic_date == today:
+        return False
+    subscription.daily_traffic_date = today
+    subscription.daily_baseline_bytes = snapshot.total_bytes
+    return True
 
 
 async def get_user_active_subscriptions(session: AsyncSession, user_id: int) -> list[Subscription]:

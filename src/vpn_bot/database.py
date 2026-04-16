@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 from vpn_bot.models import Base
@@ -20,3 +21,19 @@ def build_session_factory(database_path: Path) -> tuple[AsyncEngine, async_sessi
 async def init_db(engine: AsyncEngine) -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        if engine.url.get_backend_name() == "sqlite":
+            await _ensure_sqlite_schema(conn)
+
+
+async def _ensure_sqlite_schema(conn) -> None:
+    existing_columns = {row[1] for row in (await conn.execute(text("PRAGMA table_info(subscriptions)"))).fetchall()}
+    missing_columns = {
+        "daily_traffic_date": "ALTER TABLE subscriptions ADD COLUMN daily_traffic_date VARCHAR(10)",
+        "daily_baseline_bytes": ("ALTER TABLE subscriptions ADD COLUMN daily_baseline_bytes BIGINT NOT NULL DEFAULT 0"),
+        "speed_limit_kbytes_per_second": (
+            "ALTER TABLE subscriptions ADD COLUMN speed_limit_kbytes_per_second INTEGER NOT NULL DEFAULT 0"
+        ),
+    }
+    for column, statement in missing_columns.items():
+        if column not in existing_columns:
+            await conn.execute(text(statement))

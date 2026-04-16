@@ -27,6 +27,11 @@ ADD_CLIENT_PATHS = (
     "panel/api/inbound/addClient",
     "panel/inbound/addClient",
 )
+UPDATE_CLIENT_PATHS = (
+    "panel/api/inbounds/updateClient/{client_id}",
+    "panel/api/inbound/updateClient/{client_id}",
+    "panel/inbound/updateClient/{client_id}",
+)
 
 
 @dataclass(frozen=True)
@@ -178,6 +183,7 @@ class XUIClient:
                     "totalGB": traffic_limit_bytes,
                     "expiryTime": int(expires_at.timestamp() * 1000),
                     "enable": True,
+                    "speedLimit": 0,
                     "tgId": str(telegram_user_id),
                     "subId": self.generate_sub_id(),
                     "comment": comment,
@@ -192,6 +198,23 @@ class XUIClient:
         await self._request_with_fallback("POST", ADD_CLIENT_PATHS, json_data=payload)
         access_url = self.build_vless_reality_link(inbound, client_id=client_id, email=email)
         return ProvisionedClient(client_id=client_id, email=email, access_url=access_url)
+
+    async def update_client_speed_limit(
+        self,
+        inbound_id: int,
+        *,
+        client_id: str,
+        speed_limit_kbytes_per_second: int,
+    ) -> None:
+        inbound = await self.get_inbound(inbound_id)
+        client = self._find_client(inbound, client_id)
+        client["speedLimit"] = max(0, int(speed_limit_kbytes_per_second))
+        payload = {
+            "id": inbound_id,
+            "settings": json.dumps({"clients": [client]}),
+        }
+        paths = tuple(path.format(client_id=quote(client_id, safe="")) for path in UPDATE_CLIENT_PATHS)
+        await self._request_with_fallback("POST", paths, json_data=payload)
 
     async def fetch_traffic_map(self) -> dict[str, TrafficSnapshot]:
         inbounds = await self.list_inbounds()
@@ -248,6 +271,16 @@ class XUIClient:
         client_stats = normalized.get("clientStats") or normalized.get("client_stats") or []
         normalized["clientStats"] = [_parse_json_maybe(item) for item in client_stats]
         return normalized
+
+    def _find_client(self, inbound: dict[str, Any], client_id: str) -> dict[str, Any]:
+        settings = inbound.get("settings")
+        if not isinstance(settings, dict):
+            raise XUIError("Не удалось прочитать settings inbound в 3x-ui")
+        for client in settings.get("clients", []):
+            parsed_client = _parse_json_maybe(client)
+            if isinstance(parsed_client, dict) and parsed_client.get("id") == client_id:
+                return dict(parsed_client)
+        raise XUIError(f"Клиент {client_id} не найден в inbound {inbound.get('id')}")
 
     @staticmethod
     def generate_client_id() -> str:
