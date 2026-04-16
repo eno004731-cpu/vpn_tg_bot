@@ -19,10 +19,12 @@ class XUIError(RuntimeError):
 
 INBOUND_LIST_PATHS = (
     "panel/api/inbounds/list",
+    "panel/api/inbound/list",
     "panel/inbound/list",
 )
 ADD_CLIENT_PATHS = (
     "panel/api/inbounds/addClient",
+    "panel/api/inbound/addClient",
     "panel/inbound/addClient",
 )
 

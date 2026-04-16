@@ -64,7 +64,7 @@ async def test_list_inbounds_uses_modern_api_path_first() -> None:
     await client.close()
 
 
-async def test_list_inbounds_falls_back_to_legacy_api_path() -> None:
+async def test_list_inbounds_falls_back_to_singular_api_path() -> None:
     client = XUIClient(make_settings())
     calls = []
 
@@ -79,6 +79,28 @@ async def test_list_inbounds_falls_back_to_legacy_api_path() -> None:
     assert await client.list_inbounds() == []
     assert calls == [
         ("GET", "panel/api/inbounds/list"),
+        ("GET", "panel/api/inbound/list"),
+    ]
+
+    await client.close()
+
+
+async def test_list_inbounds_falls_back_to_legacy_api_path() -> None:
+    client = XUIClient(make_settings())
+    calls = []
+
+    async def fake_request(method, path, *, json_data=None, data=None):
+        calls.append((method, path))
+        if path in {"panel/api/inbounds/list", "panel/api/inbound/list"}:
+            raise http_404(path)
+        return {"obj": []}
+
+    client._request = fake_request
+
+    assert await client.list_inbounds() == []
+    assert calls == [
+        ("GET", "panel/api/inbounds/list"),
+        ("GET", "panel/api/inbound/list"),
         ("GET", "panel/inbound/list"),
     ]
 
