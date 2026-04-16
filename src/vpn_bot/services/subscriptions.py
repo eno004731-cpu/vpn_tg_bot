@@ -2,14 +2,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import timedelta
-from typing import Iterable
+from typing import Iterable, Mapping, Optional
+from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from vpn_bot.config import Settings, TrafficPolicySettings
+from vpn_bot.config import PlanDefinition, Settings, TrafficPolicySettings
 from vpn_bot.models import Invoice, InvoiceStatus, Subscription, SubscriptionStatus, User
 from vpn_bot.services.xui import TrafficSnapshot, XUIClient
 from vpn_bot.utils import ensure_utc, utc_now
@@ -24,6 +25,10 @@ class ActivationResult:
 
 def build_xui_email(tg_id: int, invoice_id: int, plan_code: str) -> str:
     return f"tg{tg_id}-{plan_code}-{invoice_id}@vpn.local".lower()
+
+
+def build_manual_xui_email(tg_id: int, plan_code: str) -> str:
+    return f"tg{tg_id}-{plan_code}-manual-{uuid4().hex[:8]}@vpn.local".lower()
 
 
 async def activate_invoice(
@@ -63,6 +68,7 @@ async def activate_invoice(
         plan_code=invoice.plan_code,
         plan_title=invoice.plan_title,
         status=SubscriptionStatus.active.value,
+        node_code=settings.xui.node_code,
         xui_client_id=provisioned.client_id,
         xui_email=provisioned.email,
         access_url=provisioned.access_url,
@@ -79,10 +85,83 @@ async def activate_invoice(
     return ActivationResult(invoice=invoice, subscription=subscription, user=invoice.user)
 
 
+async def provision_subscription_for_user(
+    session: AsyncSession,
+    settings: Settings,
+    panel: XUIClient,
+    user: User,
+    *,
+    plan_code: str,
+    plan_title: str,
+    duration_days: int,
+    traffic_limit_bytes: int,
+    source_invoice_id: Optional[int] = None,
+) -> Subscription:
+    now = utc_now()
+    client_id = panel.generate_client_id()
+    xui_email = build_manual_xui_email(user.tg_id, plan_code)
+    expires_at = now + timedelta(days=duration_days)
+    provisioned = await panel.add_client(
+        settings.xui.inbound_id,
+        client_id=client_id,
+        email=xui_email,
+        traffic_limit_bytes=traffic_limit_bytes,
+        expires_at=expires_at,
+        flow=settings.xui.flow,
+        telegram_user_id=user.tg_id,
+        comment=plan_title,
+    )
+    subscription = Subscription(
+        user_id=user.id,
+        source_invoice_id=source_invoice_id,
+        plan_code=plan_code,
+        plan_title=plan_title,
+        status=SubscriptionStatus.active.value,
+        node_code=settings.xui.node_code,
+        xui_client_id=provisioned.client_id,
+        xui_email=provisioned.email,
+        access_url=provisioned.access_url,
+        traffic_limit_bytes=traffic_limit_bytes,
+        started_at=now,
+        ends_at=expires_at,
+    )
+    session.add(subscription)
+    await session.commit()
+    await session.refresh(subscription)
+    return subscription
+
+
+async def revoke_subscription(
+    session: AsyncSession,
+    settings: Settings,
+    panel: XUIClient,
+    subscription_id: int,
+) -> Subscription:
+    subscription = await session.scalar(
+        select(Subscription).options(selectinload(Subscription.user)).where(Subscription.id == subscription_id)
+    )
+    if subscription is None:
+        raise ValueError("Подписка не найдена.")
+    if subscription.status != SubscriptionStatus.active.value:
+        raise ValueError("Подписка уже не активна.")
+
+    await panel.set_client_enabled(
+        settings.xui.inbound_id,
+        client_id=subscription.xui_client_id,
+        enabled=False,
+    )
+    subscription.status = SubscriptionStatus.revoked.value
+    subscription.speed_limit_kbytes_per_second = 0
+    await session.commit()
+    await session.refresh(subscription)
+    return subscription
+
+
 async def sync_active_subscriptions(
     session: AsyncSession,
     panel: XUIClient,
-    settings: Settings | None = None,
+    settings: Optional[Settings] = None,
+    plans: Optional[Mapping[str, PlanDefinition]] = None,
 ) -> list[Subscription]:
     subscriptions = list(
         await session.scalars(
@@ -106,7 +185,13 @@ async def sync_active_subscriptions(
             subscription.traffic_used_bytes = snapshot.total_bytes
             subscription.last_synced_at = now
             changed = True
-            if settings is not None and await _apply_daily_traffic_policy(subscription, snapshot, panel, settings):
+            if settings is not None and await _apply_daily_traffic_policy(
+                subscription,
+                snapshot,
+                panel,
+                settings,
+                plan_daily_limit_bytes=_get_plan_daily_limit_bytes(subscription, plans),
+            ):
                 changed = True
         if (
             ensure_utc(subscription.ends_at) <= now
@@ -126,6 +211,7 @@ async def _apply_daily_traffic_policy(
     snapshot: TrafficSnapshot,
     panel: XUIClient,
     settings: Settings,
+    plan_daily_limit_bytes: Optional[int] = None,
 ) -> bool:
     policy = settings.traffic_policy
     if not policy.enabled:
@@ -133,7 +219,8 @@ async def _apply_daily_traffic_policy(
 
     changed = _refresh_daily_baseline(subscription, snapshot, policy)
     daily_used_bytes = max(snapshot.total_bytes - subscription.daily_baseline_bytes, 0)
-    target_speed_limit = policy.throttled_speed_kbytes_per_second if daily_used_bytes >= policy.daily_limit_bytes else 0
+    daily_limit_bytes = plan_daily_limit_bytes or policy.daily_limit_bytes
+    target_speed_limit = policy.throttled_speed_kbytes_per_second if daily_used_bytes >= daily_limit_bytes else 0
 
     if subscription.speed_limit_kbytes_per_second == target_speed_limit:
         return changed
@@ -158,6 +245,18 @@ def _refresh_daily_baseline(
     subscription.daily_traffic_date = today
     subscription.daily_baseline_bytes = snapshot.total_bytes
     return True
+
+
+def _get_plan_daily_limit_bytes(
+    subscription: Subscription,
+    plans: Optional[Mapping[str, PlanDefinition]],
+) -> Optional[int]:
+    if plans is None:
+        return None
+    plan = plans.get(subscription.plan_code)
+    if plan is None:
+        return None
+    return plan.daily_limit_bytes
 
 
 async def get_user_active_subscriptions(session: AsyncSession, user_id: int) -> list[Subscription]:

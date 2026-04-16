@@ -12,6 +12,7 @@ price_rub = "0.00"
 price_stars = 1
 duration_days = 0
 traffic_limit_gb = 0
+daily_limit_gb = 1
 description = "Проверка оплаты."
 provision_access = false
 """,
@@ -24,3 +25,5 @@ provision_access = false
     assert not plan.supports_transfer
     assert not plan.provision_access
     assert plan.price_stars == 1
+    assert plan.daily_limit_gb == 1
+    assert plan.daily_limit_bytes == 1024 * 1024 * 1024

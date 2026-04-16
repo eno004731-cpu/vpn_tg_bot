@@ -64,6 +64,7 @@ class XUISettings:
     fingerprint: str = "chrome"
     flow: str = "xtls-rprx-vision"
     spider_x: str = "/"
+    node_code: str = "main"
 
 
 @dataclass
@@ -86,10 +87,17 @@ class PlanDefinition:
     description: Optional[str] = None
     price_stars: Optional[int] = None
     provision_access: bool = True
+    daily_limit_gb: Optional[int] = None
 
     @property
     def traffic_limit_bytes(self) -> int:
         return self.traffic_limit_gb * 1024 * 1024 * 1024
+
+    @property
+    def daily_limit_bytes(self) -> Optional[int]:
+        if self.daily_limit_gb is None:
+            return None
+        return self.daily_limit_gb * 1024 * 1024 * 1024
 
     @property
     def supports_transfer(self) -> bool:
@@ -234,6 +242,7 @@ def load_settings() -> Settings:
             timezone=traffic_policy_timezone,
         ),
         xui=XUISettings(
+            node_code=_coalesce(os.getenv("VPN_BOT_XUI_NODE_CODE"), xui.get("node_code"), default="main"),
             base_url=xui_base_url,
             username=xui_username,
             password=xui_password,
@@ -271,6 +280,7 @@ def load_plans(path: Optional[Path] = None) -> dict[str, PlanDefinition]:
             description=item.get("description"),
             price_stars=int(item["price_stars"]) if item.get("price_stars") is not None else None,
             provision_access=bool(item.get("provision_access", True)),
+            daily_limit_gb=int(item["daily_limit_gb"]) if item.get("daily_limit_gb") is not None else None,
         )
         plans[plan.code] = plan
     if not plans:

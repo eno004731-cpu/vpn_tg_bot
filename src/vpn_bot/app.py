@@ -55,7 +55,7 @@ async def background_sync(context: AppContext) -> None:
     while True:
         try:
             async with context.session_factory() as session:
-                await sync_active_subscriptions(session, context.panel, context.settings)
+                await sync_active_subscriptions(session, context.panel, context.settings, context.plans)
         except Exception:  # noqa: BLE001
             logging.exception("Traffic sync failed")
         await asyncio.sleep(context.settings.app.sync_interval_seconds)

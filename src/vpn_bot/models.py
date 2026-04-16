@@ -78,6 +78,7 @@ class Subscription(Base):
     plan_code: Mapped[str] = mapped_column(String(64))
     plan_title: Mapped[str] = mapped_column(String(255))
     status: Mapped[str] = mapped_column(String(32), default=SubscriptionStatus.active.value)
+    node_code: Mapped[str] = mapped_column(String(64), default="main")
     xui_client_id: Mapped[str] = mapped_column(String(64), unique=True)
     xui_email: Mapped[str] = mapped_column(String(255), unique=True, index=True)
     access_url: Mapped[str] = mapped_column(Text)

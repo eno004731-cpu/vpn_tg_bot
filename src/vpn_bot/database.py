@@ -33,6 +33,7 @@ async def _ensure_sqlite_schema(conn) -> None:
         "speed_limit_kbytes_per_second": (
             "ALTER TABLE subscriptions ADD COLUMN speed_limit_kbytes_per_second INTEGER NOT NULL DEFAULT 0"
         ),
+        "node_code": "ALTER TABLE subscriptions ADD COLUMN node_code VARCHAR(64) NOT NULL DEFAULT 'main'",
     }
     for column, statement in missing_columns.items():
         if column not in existing_columns:

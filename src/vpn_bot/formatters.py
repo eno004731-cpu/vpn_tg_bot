@@ -64,6 +64,8 @@ def format_admin_help() -> str:
             "<b>Админ-команды</b>",
             "/admin - сводка по платежам и активным подпискам",
             "/admin help - показать эту подсказку",
+            "/admin users [username|id] - список и поиск пользователей",
+            "/users [username|id] - короткий алиас для поиска",
             "/traffic_admin - показать пользователей и расход трафика",
             "/approve &lt;invoice_id&gt; - подтвердить оплату",
             "/reject &lt;invoice_id&gt; [причина] - отклонить оплату",

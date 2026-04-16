@@ -199,6 +199,33 @@ async def test_update_client_speed_limit_uses_update_endpoint() -> None:
     await client.close()
 
 
+async def test_set_client_enabled_disables_client() -> None:
+    client = XUIClient(make_settings())
+    requests = []
+
+    async def fake_get_inbound(inbound_id):
+        assert inbound_id == 1
+        return make_reality_inbound()
+
+    async def fake_request(method, path, *, json_data=None, data=None):
+        requests.append((method, path, json_data))
+        return {"success": True}
+
+    client.get_inbound = fake_get_inbound
+    client._request = fake_request
+
+    await client.set_client_enabled(1, client_id="uuid-1", enabled=False)
+
+    method, path, payload = requests[0]
+    assert method == "POST"
+    assert path == "panel/api/inbounds/updateClient/uuid-1"
+    settings = json.loads(payload["settings"])
+    assert settings["clients"][0]["enable"] is False
+    assert settings["clients"][0]["speedLimit"] == 0
+
+    await client.close()
+
+
 async def test_login_rejects_success_false_response() -> None:
     client = XUIClient(make_settings())
 

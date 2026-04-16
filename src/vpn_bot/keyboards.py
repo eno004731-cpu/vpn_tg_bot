@@ -25,6 +25,29 @@ class AdminInvoiceAction(CallbackData, prefix="admin_invoice"):
     invoice_id: int
 
 
+class AdminUsersPage(CallbackData, prefix="aup"):
+    page: int
+
+
+class AdminUserAction(CallbackData, prefix="au"):
+    action: str
+    user_id: int
+    page: int
+
+
+class AdminSubscriptionAction(CallbackData, prefix="asub"):
+    action: str
+    subscription_id: int
+    user_id: int
+    page: int
+
+
+class AdminGrantPlan(CallbackData, prefix="ag"):
+    user_id: int
+    plan_code: str
+    page: int
+
+
 def main_menu() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
@@ -107,3 +130,110 @@ def admin_invoice_keyboard(invoice_id: int) -> InlineKeyboardMarkup:
             ]
         ]
     )
+
+
+def admin_users_keyboard(
+    users: list[tuple[int, str]], page: int, has_prev: bool, has_next: bool
+) -> InlineKeyboardMarkup:
+    rows = [
+        [
+            InlineKeyboardButton(
+                text=label,
+                callback_data=AdminUserAction(action="view", user_id=user_id, page=page).pack(),
+            )
+        ]
+        for user_id, label in users
+    ]
+    navigation = []
+    if has_prev:
+        navigation.append(
+            InlineKeyboardButton(
+                text="<<",
+                callback_data=AdminUsersPage(page=page - 1).pack(),
+            )
+        )
+    if has_next:
+        navigation.append(
+            InlineKeyboardButton(
+                text=">>",
+                callback_data=AdminUsersPage(page=page + 1).pack(),
+            )
+        )
+    if navigation:
+        rows.append(navigation)
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def admin_user_keyboard(
+    user_id: int,
+    page: int,
+    active_subscription_ids: list[int],
+) -> InlineKeyboardMarkup:
+    rows = [
+        [
+            InlineKeyboardButton(
+                text="Дать доступ",
+                callback_data=AdminUserAction(action="grant", user_id=user_id, page=page).pack(),
+            )
+        ]
+    ]
+    rows.extend(
+        [
+            [
+                InlineKeyboardButton(
+                    text=f"Забрать #{subscription_id}",
+                    callback_data=AdminSubscriptionAction(
+                        action="revoke",
+                        subscription_id=subscription_id,
+                        user_id=user_id,
+                        page=page,
+                    ).pack(),
+                )
+            ]
+            for subscription_id in active_subscription_ids
+        ]
+    )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="Назад к списку",
+                callback_data=AdminUsersPage(page=page).pack(),
+            )
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def admin_user_search_back_keyboard(page: int = 0) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="Назад к списку",
+                    callback_data=AdminUsersPage(page=page).pack(),
+                )
+            ]
+        ]
+    )
+
+
+def admin_grant_plans_keyboard(user_id: int, page: int, plans: list[PlanDefinition]) -> InlineKeyboardMarkup:
+    rows = [
+        [
+            InlineKeyboardButton(
+                text=plan.title,
+                callback_data=AdminGrantPlan(user_id=user_id, plan_code=plan.code, page=page).pack(),
+            )
+        ]
+        for plan in plans
+        if plan.provision_access
+    ]
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="Назад",
+                callback_data=AdminUserAction(action="view", user_id=user_id, page=page).pack(),
+            )
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)

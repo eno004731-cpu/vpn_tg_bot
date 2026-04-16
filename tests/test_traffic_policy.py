@@ -61,12 +61,12 @@ def make_subscription(**overrides) -> Subscription:
         "user_id": 1,
         "source_invoice_id": 1,
         "plan_code": "starter",
-        "plan_title": "30 дней / 200 ГБ",
+        "plan_title": "30 дней / 310 ГБ",
         "status": "active",
         "xui_client_id": "uuid-1",
         "xui_email": "tg1@vpn.local",
         "access_url": "vless://example",
-        "traffic_limit_bytes": 200 * 1024 * 1024 * 1024,
+        "traffic_limit_bytes": 310 * 1024 * 1024 * 1024,
         "upload_bytes": 0,
         "download_bytes": 0,
         "traffic_used_bytes": 0,
@@ -119,3 +119,27 @@ async def test_daily_policy_resets_speed_on_new_day() -> None:
     assert subscription.daily_baseline_bytes == snapshot.total_bytes
     assert subscription.speed_limit_kbytes_per_second == 0
     assert panel.calls == [(7, "uuid-1", 0)]
+
+
+async def test_daily_policy_uses_plan_limit_override() -> None:
+    settings = make_settings()
+    subscription = make_subscription()
+    snapshot = TrafficSnapshot(
+        email=subscription.xui_email,
+        upload_bytes=0,
+        download_bytes=100 * 1024 * 1024 * 1024,
+        total_bytes=100 * 1024 * 1024 * 1024,
+    )
+    panel = FakePanel()
+
+    changed = await _apply_daily_traffic_policy(
+        subscription,
+        snapshot,
+        panel,
+        settings,
+        plan_daily_limit_bytes=150 * 1024 * 1024 * 1024,
+    )
+
+    assert changed is False
+    assert subscription.speed_limit_kbytes_per_second == 0
+    assert panel.calls == []

@@ -206,15 +206,17 @@ class XUIClient:
         client_id: str,
         speed_limit_kbytes_per_second: int,
     ) -> None:
-        inbound = await self.get_inbound(inbound_id)
-        client = self._find_client(inbound, client_id)
-        client["speedLimit"] = max(0, int(speed_limit_kbytes_per_second))
-        payload = {
-            "id": inbound_id,
-            "settings": json.dumps({"clients": [client]}),
-        }
-        paths = tuple(path.format(client_id=quote(client_id, safe="")) for path in UPDATE_CLIENT_PATHS)
-        await self._request_with_fallback("POST", paths, json_data=payload)
+        await self._update_client(
+            inbound_id,
+            client_id=client_id,
+            changes={"speedLimit": max(0, int(speed_limit_kbytes_per_second))},
+        )
+
+    async def set_client_enabled(self, inbound_id: int, *, client_id: str, enabled: bool) -> None:
+        changes: dict[str, Any] = {"enable": enabled}
+        if not enabled:
+            changes["speedLimit"] = 0
+        await self._update_client(inbound_id, client_id=client_id, changes=changes)
 
     async def fetch_traffic_map(self) -> dict[str, TrafficSnapshot]:
         inbounds = await self.list_inbounds()
@@ -281,6 +283,17 @@ class XUIClient:
             if isinstance(parsed_client, dict) and parsed_client.get("id") == client_id:
                 return dict(parsed_client)
         raise XUIError(f"Клиент {client_id} не найден в inbound {inbound.get('id')}")
+
+    async def _update_client(self, inbound_id: int, *, client_id: str, changes: dict[str, Any]) -> None:
+        inbound = await self.get_inbound(inbound_id)
+        client = self._find_client(inbound, client_id)
+        client.update(changes)
+        payload = {
+            "id": inbound_id,
+            "settings": json.dumps({"clients": [client]}),
+        }
+        paths = tuple(path.format(client_id=quote(client_id, safe="")) for path in UPDATE_CLIENT_PATHS)
+        await self._request_with_fallback("POST", paths, json_data=payload)
 
     @staticmethod
     def generate_client_id() -> str:
