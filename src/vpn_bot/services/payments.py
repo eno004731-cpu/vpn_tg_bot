@@ -13,7 +13,6 @@ from vpn_bot.config import PaymentSettings, PlanDefinition
 from vpn_bot.models import Invoice, InvoiceStatus, User
 from vpn_bot.utils import decimal_to_kopecks, ensure_utc, format_card_number, utc_now
 
-
 OPEN_INVOICE_STATUSES = (
     InvoiceStatus.awaiting_transfer.value,
     InvoiceStatus.pending_review.value,
@@ -79,16 +78,10 @@ async def create_invoice(
 def format_invoice_for_user(invoice: Invoice, payment_settings: PaymentSettings) -> str:
     payment_lines = []
     if payment_settings.phone:
-        payment_lines.append(
-            f"СБП по телефону: <code>{escape(payment_settings.phone)}</code>"
-        )
-        payment_lines.append(
-            f"Карта для перевода: <code>{format_card_number(payment_settings.card_number)}</code>"
-        )
+        payment_lines.append(f"СБП по телефону: <code>{escape(payment_settings.phone)}</code>")
+        payment_lines.append(f"Карта для перевода: <code>{format_card_number(payment_settings.card_number)}</code>")
     else:
-        payment_lines.append(
-            f"Карта для перевода: <code>{format_card_number(payment_settings.card_number)}</code>"
-        )
+        payment_lines.append(f"Карта для перевода: <code>{format_card_number(payment_settings.card_number)}</code>")
 
     lines = [
         f"<b>{escape(invoice.plan_title)}</b>",

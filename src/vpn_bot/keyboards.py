@@ -71,4 +71,3 @@ def admin_invoice_keyboard(invoice_id: int) -> InlineKeyboardMarkup:
             ]
         ]
     )
-

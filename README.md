@@ -112,3 +112,46 @@ git check-ignore -v secrets/runtime.toml data/bot.sqlite3 .env
 ```
 
 В публичный репозиторий должны попадать только примеры из `config/examples/`, без настоящих токенов, паролей, карт и доменов.
+
+## CI/CD
+
+CI запускается на `push` и `pull_request`:
+
+```bash
+python scripts/check_secrets.py
+ruff format --check .
+ruff check .
+pytest -q
+```
+
+Локально можно повторить те же проверки:
+
+```bash
+python -m pip install ".[dev]"
+python scripts/check_secrets.py
+ruff format --check .
+ruff check .
+pytest -q
+```
+
+CD запускается только при `push` в `main` или вручную через `workflow_dispatch`. Для деплоя нужен self-hosted runner на сервере с labels:
+
+```text
+vpn-bot,prod
+```
+
+И systemd-сервис:
+
+```bash
+sudo systemctl status vpn-bot --no-pager
+```
+
+Чтобы runner мог перезапускать только сервис бота без пароля:
+
+```bash
+sudo visudo -f /etc/sudoers.d/github-runner-vpn-bot
+```
+
+```text
+github-runner ALL=(root) NOPASSWD: /bin/systemctl restart vpn-bot, /bin/systemctl status vpn-bot, /usr/bin/systemctl restart vpn-bot, /usr/bin/systemctl status vpn-bot
+```

@@ -20,4 +20,3 @@ def build_session_factory(database_path: Path) -> tuple[AsyncEngine, async_sessi
 async def init_db(engine: AsyncEngine) -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
-

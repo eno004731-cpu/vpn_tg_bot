@@ -10,11 +10,14 @@ from vpn_bot.utils import ensure_utc, format_bytes
 def format_user_subscriptions(subscriptions: Iterable[Subscription]) -> str:
     parts: list[str] = []
     for subscription in subscriptions:
+        traffic_usage = (
+            f"{format_bytes(subscription.traffic_used_bytes)} / {format_bytes(subscription.traffic_limit_bytes)}"
+        )
         parts.append(
             "\n".join(
                 [
                     f"<b>{escape(subscription.plan_title)}</b>",
-                    f"Использовано: {format_bytes(subscription.traffic_used_bytes)} / {format_bytes(subscription.traffic_limit_bytes)}",
+                    f"Использовано: {traffic_usage}",
                     f"Загрузка: {format_bytes(subscription.download_bytes)}",
                     f"Отдача: {format_bytes(subscription.upload_bytes)}",
                     f"Действует до: {ensure_utc(subscription.ends_at).astimezone().strftime('%Y-%m-%d %H:%M')}",

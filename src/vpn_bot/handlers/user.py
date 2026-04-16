@@ -17,15 +17,18 @@ from vpn_bot.keyboards import (
 from vpn_bot.models import Invoice, InvoiceStatus
 from vpn_bot.runtime import AppContext
 from vpn_bot.services.payments import (
-    mark_invoice_pending_review,
     create_invoice,
     format_invoice_for_admin,
     format_invoice_for_user,
+    mark_invoice_pending_review,
 )
-from vpn_bot.services.subscriptions import get_open_invoices_for_user, get_user_active_subscriptions, sync_active_subscriptions
+from vpn_bot.services.subscriptions import (
+    get_open_invoices_for_user,
+    get_user_active_subscriptions,
+    sync_active_subscriptions,
+)
 from vpn_bot.services.users import ensure_user
 from vpn_bot.utils import ensure_utc, utc_now
-
 
 router = Router(name="user")
 
@@ -36,10 +39,7 @@ async def start_handler(message: Message, app_context: AppContext) -> None:
         await ensure_user(session, message.from_user, app_context.settings.app.admin_ids)
         await session.commit()
     await message.answer(
-        (
-            "Привет. Я могу оформить VPN-подписку, показать трафик и выдать ссылку "
-            "для Hiddify или v2RayTun."
-        ),
+        ("Привет. Я могу оформить VPN-подписку, показать трафик и выдать ссылку для Hiddify или v2RayTun."),
         reply_markup=main_menu(),
     )
 
@@ -55,9 +55,7 @@ async def buy_handler(message: Message, app_context: AppContext) -> None:
 
 
 @router.callback_query(PlanChoice.filter())
-async def plan_selected(
-    callback: CallbackQuery, callback_data: PlanChoice, app_context: AppContext
-) -> None:
+async def plan_selected(callback: CallbackQuery, callback_data: PlanChoice, app_context: AppContext) -> None:
     plan = app_context.plans.get(callback_data.code)
     if plan is None:
         await callback.answer("Тариф не найден.", show_alert=True)
@@ -75,13 +73,9 @@ async def plan_selected(
 
 
 @router.callback_query(InvoiceAction.filter(F.action == "paid"))
-async def invoice_paid(
-    callback: CallbackQuery, callback_data: InvoiceAction, app_context: AppContext
-) -> None:
+async def invoice_paid(callback: CallbackQuery, callback_data: InvoiceAction, app_context: AppContext) -> None:
     async with app_context.session_factory() as session:
-        invoice = await session.scalar(
-            select(Invoice).where(Invoice.id == callback_data.invoice_id)
-        )
+        invoice = await session.scalar(select(Invoice).where(Invoice.id == callback_data.invoice_id))
         if invoice is None or callback.from_user is None:
             await callback.answer("Инвойс не найден.", show_alert=True)
             return
@@ -132,10 +126,7 @@ async def my_subscription(message: Message, app_context: AppContext) -> None:
     if open_invoices:
         invoice = open_invoices[0]
         await message.answer(
-            (
-                "У вас есть незавершённый инвойс:\n"
-                f"{format_invoice_for_user(invoice, app_context.settings.payment)}"
-            ),
+            (f"У вас есть незавершённый инвойс:\n{format_invoice_for_user(invoice, app_context.settings.payment)}"),
             reply_markup=invoice_keyboard(invoice.id),
         )
         return

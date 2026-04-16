@@ -1,0 +1,82 @@
+name: Deploy
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy to production server
+    runs-on: [self-hosted, Linux, X64, vpn-bot, prod]
+
+    env:
+      APP_DIR: /opt/vpn-bot
+      SERVICE_NAME: vpn-bot
+
+    steps:
+      - name: Checkout for checks
+        uses: actions/checkout@v4
+
+      - name: Run secret scan
+        run: python3 scripts/check_secrets.py
+
+      - name: Install test dependencies
+        run: |
+          python3 -m venv .venv
+          .venv/bin/python -m pip install --upgrade pip
+          .venv/bin/python -m pip install ".[dev]"
+
+      - name: Run code checks
+        run: |
+          .venv/bin/ruff format --check .
+          .venv/bin/ruff check .
+          .venv/bin/pytest -q
+
+      - name: Sync application directory
+        run: |
+          set -euo pipefail
+
+          if [ ! -d "$APP_DIR/.git" ]; then
+            sudo mkdir -p "$APP_DIR"
+            sudo chown -R "$USER:$USER" "$APP_DIR"
+            git clone "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git" "$APP_DIR"
+          fi
+
+          cd "$APP_DIR"
+          git fetch --prune origin main
+          git checkout main
+          git reset --hard "$GITHUB_SHA"
+
+      - name: Install app and migrate database
+        run: |
+          set -euo pipefail
+          cd "$APP_DIR"
+          python3 -m venv .venv
+          .venv/bin/python -m pip install --upgrade pip
+          .venv/bin/python -m pip install -e .
+          .venv/bin/python -m vpn_bot init-db
+
+      - name: Restart bot service
+        run: |
+          set -euo pipefail
+          sudo systemctl restart "$SERVICE_NAME"
+          sudo systemctl status "$SERVICE_NAME" --no-pager
+
+      - name: Deployment summary
+        run: |
+          {
+            echo "## Deploy complete"
+            echo ""
+            echo "- Commit: \`$GITHUB_SHA\`"
+            echo "- App dir: \`$APP_DIR\`"
+            echo "- Service: \`$SERVICE_NAME\`"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -28,17 +28,11 @@ def build_xui_email(tg_id: int, invoice_id: int, plan_code: str) -> str:
 async def activate_invoice(
     session: AsyncSession, settings: Settings, panel: XUIClient, invoice_id: int
 ) -> ActivationResult:
-    invoice = await session.scalar(
-        select(Invoice)
-        .options(selectinload(Invoice.user))
-        .where(Invoice.id == invoice_id)
-    )
+    invoice = await session.scalar(select(Invoice).options(selectinload(Invoice.user)).where(Invoice.id == invoice_id))
     if invoice is None:
         raise ValueError("Инвойс не найден.")
     if invoice.status == InvoiceStatus.paid.value:
-        subscription = await session.scalar(
-            select(Subscription).where(Subscription.source_invoice_id == invoice.id)
-        )
+        subscription = await session.scalar(select(Subscription).where(Subscription.source_invoice_id == invoice.id))
         if subscription is None:
             raise ValueError("Инвойс уже оплачен, но подписка не найдена.")
         return ActivationResult(invoice=invoice, subscription=subscription, user=invoice.user)
@@ -107,7 +101,10 @@ async def sync_active_subscriptions(session: AsyncSession, panel: XUIClient) -> 
             subscription.traffic_used_bytes = snapshot.total_bytes
             subscription.last_synced_at = now
             changed = True
-        if ensure_utc(subscription.ends_at) <= now or subscription.traffic_used_bytes >= subscription.traffic_limit_bytes:
+        if (
+            ensure_utc(subscription.ends_at) <= now
+            or subscription.traffic_used_bytes >= subscription.traffic_limit_bytes
+        ):
             if subscription.status != SubscriptionStatus.expired.value:
                 subscription.status = SubscriptionStatus.expired.value
                 changed = True

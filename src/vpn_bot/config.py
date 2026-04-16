@@ -124,21 +124,13 @@ def load_settings() -> Settings:
 
     bot_token = _coalesce(os.getenv("VPN_BOT_TOKEN"), app.get("bot_token"))
     if not bot_token:
-        raise ConfigError(
-            f"Не найден токен бота. Заполните {secrets_file} или VPN_BOT_TOKEN."
-        )
+        raise ConfigError(f"Не найден токен бота. Заполните {secrets_file} или VPN_BOT_TOKEN.")
 
-    admin_ids = _env_list_of_ints("VPN_BOT_ADMIN_IDS") or tuple(
-        int(item) for item in app.get("admin_ids", [])
-    )
+    admin_ids = _env_list_of_ints("VPN_BOT_ADMIN_IDS") or tuple(int(item) for item in app.get("admin_ids", []))
     if not admin_ids:
-        raise ConfigError(
-            f"Не найдены admin_ids. Заполните {secrets_file} -> [app].admin_ids."
-        )
+        raise ConfigError(f"Не найдены admin_ids. Заполните {secrets_file} -> [app].admin_ids.")
 
-    database_path_raw = _coalesce(
-        os.getenv("VPN_BOT_DB_PATH"), app.get("database_path"), default="data/bot.sqlite3"
-    )
+    database_path_raw = _coalesce(os.getenv("VPN_BOT_DB_PATH"), app.get("database_path"), default="data/bot.sqlite3")
     database_path = Path(database_path_raw)
     if not database_path.is_absolute():
         database_path = BASE_DIR / database_path
@@ -154,18 +146,12 @@ def load_settings() -> Settings:
         "xui.password": xui_password,
         "xui.public_host": public_host,
         "payment.bank_name": _coalesce(os.getenv("VPN_BOT_BANK_NAME"), payment.get("bank_name")),
-        "payment.receiver_name": _coalesce(
-            os.getenv("VPN_BOT_RECEIVER_NAME"), payment.get("receiver_name")
-        ),
-        "payment.card_number": _coalesce(
-            os.getenv("VPN_BOT_CARD_NUMBER"), payment.get("card_number")
-        ),
+        "payment.receiver_name": _coalesce(os.getenv("VPN_BOT_RECEIVER_NAME"), payment.get("receiver_name")),
+        "payment.card_number": _coalesce(os.getenv("VPN_BOT_CARD_NUMBER"), payment.get("card_number")),
     }
     missing = [key for key, value in required.items() if value in (None, "")]
     if missing:
-        raise ConfigError(
-            "Не заполнены обязательные секреты: " + ", ".join(sorted(missing))
-        )
+        raise ConfigError("Не заполнены обязательные секреты: " + ", ".join(sorted(missing)))
 
     return Settings(
         app=AppSettings(
@@ -178,33 +164,23 @@ def load_settings() -> Settings:
         ),
         payment=PaymentSettings(
             bank_name=_coalesce(os.getenv("VPN_BOT_BANK_NAME"), payment.get("bank_name")),
-            receiver_name=_coalesce(
-                os.getenv("VPN_BOT_RECEIVER_NAME"), payment.get("receiver_name")
-            ),
-            card_number=_coalesce(
-                os.getenv("VPN_BOT_CARD_NUMBER"), payment.get("card_number")
-            ),
+            receiver_name=_coalesce(os.getenv("VPN_BOT_RECEIVER_NAME"), payment.get("receiver_name")),
+            card_number=_coalesce(os.getenv("VPN_BOT_CARD_NUMBER"), payment.get("card_number")),
             phone=_coalesce(os.getenv("VPN_BOT_PHONE"), payment.get("phone")),
             invoice_lifetime_hours=_coalesce(
                 _env_int("VPN_BOT_INVOICE_LIFETIME_HOURS"),
                 payment.get("invoice_lifetime_hours"),
                 default=12,
             ),
-            instruction_hint=_coalesce(
-                os.getenv("VPN_BOT_INSTRUCTION_HINT"), payment.get("instruction_hint")
-            ),
+            instruction_hint=_coalesce(os.getenv("VPN_BOT_INSTRUCTION_HINT"), payment.get("instruction_hint")),
         ),
         xui=XUISettings(
             base_url=xui_base_url,
             username=xui_username,
             password=xui_password,
-            inbound_id=int(
-                _coalesce(_env_int("VPN_BOT_XUI_INBOUND_ID"), xui.get("inbound_id"), default=1)
-            ),
+            inbound_id=int(_coalesce(_env_int("VPN_BOT_XUI_INBOUND_ID"), xui.get("inbound_id"), default=1)),
             public_host=public_host,
-            public_port=int(
-                _coalesce(_env_int("VPN_BOT_PUBLIC_PORT"), xui.get("public_port"), default=443)
-            ),
+            public_port=int(_coalesce(_env_int("VPN_BOT_PUBLIC_PORT"), xui.get("public_port"), default=443)),
             verify_tls=bool(
                 _coalesce(
                     _env_bool("VPN_BOT_XUI_VERIFY_TLS"),
@@ -212,9 +188,7 @@ def load_settings() -> Settings:
                     default=True,
                 )
             ),
-            fingerprint=_coalesce(
-                os.getenv("VPN_BOT_FINGERPRINT"), xui.get("fingerprint"), default="chrome"
-            ),
+            fingerprint=_coalesce(os.getenv("VPN_BOT_FINGERPRINT"), xui.get("fingerprint"), default="chrome"),
             flow=_coalesce(os.getenv("VPN_BOT_FLOW"), xui.get("flow"), default="xtls-rprx-vision"),
             spider_x=_coalesce(os.getenv("VPN_BOT_SPIDER_X"), xui.get("spider_x"), default="/"),
         ),

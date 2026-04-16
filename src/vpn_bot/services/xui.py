@@ -168,9 +168,7 @@ class XUIClient:
                     upload_bytes=up,
                     download_bytes=down,
                     total_bytes=up + down,
-                    expiry_time_ms=int(item["expiryTime"])
-                    if item.get("expiryTime") not in (None, "")
-                    else None,
+                    expiry_time_ms=int(item["expiryTime"]) if item.get("expiryTime") not in (None, "") else None,
                 )
         return traffic
 
@@ -200,10 +198,7 @@ class XUIClient:
         }
         query = urlencode(params, quote_via=quote)
         remark = quote(email)
-        return (
-            f"vless://{client_id}@{self.settings.public_host}:{self.settings.public_port}"
-            f"?{query}#{remark}"
-        )
+        return f"vless://{client_id}@{self.settings.public_host}:{self.settings.public_port}?{query}#{remark}"
 
     def _normalize_inbound(self, inbound: dict[str, Any]) -> dict[str, Any]:
         normalized = dict(inbound)

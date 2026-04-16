@@ -40,9 +40,7 @@ class User(Base):
     full_name: Mapped[Optional[str]] = mapped_column(String(255))
     is_admin: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=utc_now, onupdate=utc_now
-    )
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
 
     invoices: Mapped[list["Invoice"]] = relationship(back_populates="user")
     subscriptions: Mapped[list["Subscription"]] = relationship(back_populates="user")
@@ -63,9 +61,7 @@ class Invoice(Base):
     status: Mapped[str] = mapped_column(String(32), default=InvoiceStatus.awaiting_transfer.value)
     admin_note: Mapped[Optional[str]] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=utc_now, onupdate=utc_now
-    )
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     paid_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
 
@@ -93,9 +89,7 @@ class Subscription(Base):
     ends_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     last_synced_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=utc_now, onupdate=utc_now
-    )
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
 
     user: Mapped["User"] = relationship(back_populates="subscriptions")
     source_invoice: Mapped[Optional["Invoice"]] = relationship(back_populates="subscriptions")

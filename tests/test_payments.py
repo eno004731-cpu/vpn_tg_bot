@@ -11,4 +11,3 @@ def test_reserve_unique_amount_skips_existing_values() -> None:
     candidate = reserve_unique_amount(base, used, seed=0)
 
     assert candidate == Decimal("299.13")
-
