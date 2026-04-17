@@ -9,21 +9,22 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 
 from vpn_bot.config import load_plans, load_settings
-from vpn_bot.database import build_session_factory, init_db
+from vpn_bot.database import build_session_factory_from_settings, init_db
 from vpn_bot.handlers import admin_router, user_router
 from vpn_bot.runtime import AppContext
+from vpn_bot.services.jobs import process_one_job
 from vpn_bot.services.nodes import NodeRegistry
 from vpn_bot.services.subscriptions import sync_active_subscriptions
 
 
-async def run_bot() -> None:
+async def create_app_context() -> AppContext:
     settings = load_settings()
     plans = load_plans(settings.plans_file)
-    engine, session_factory = build_session_factory(settings.app.database_path)
+    engine, session_factory = build_session_factory_from_settings(settings.app)
     await init_db(engine)
 
     nodes = NodeRegistry.from_settings(settings)
-    context = AppContext(
+    return AppContext(
         settings=settings,
         plans=plans,
         engine=engine,
@@ -31,8 +32,11 @@ async def run_bot() -> None:
         nodes=nodes,
     )
 
+
+async def run_bot() -> None:
+    context = await create_app_context()
     bot = Bot(
-        settings.app.bot_token,
+        context.settings.app.bot_token,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
     dispatcher = Dispatcher()
@@ -40,15 +44,42 @@ async def run_bot() -> None:
     dispatcher.include_router(user_router)
 
     sync_task = asyncio.create_task(background_sync(context))
+    jobs_task = asyncio.create_task(background_jobs(context, bot))
     try:
         await dispatcher.start_polling(bot, app_context=context)
     finally:
         sync_task.cancel()
+        jobs_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await sync_task
-        await nodes.close()
+        with contextlib.suppress(asyncio.CancelledError):
+            await jobs_task
+        await context.nodes.close()
         await bot.session.close()
-        await engine.dispose()
+        await context.engine.dispose()
+
+
+async def run_worker() -> None:
+    context = await create_app_context()
+    bot = Bot(
+        context.settings.app.bot_token,
+        default=DefaultBotProperties(parse_mode=ParseMode.HTML),
+    )
+
+    sync_task = asyncio.create_task(background_sync(context))
+    jobs_task = asyncio.create_task(background_jobs(context, bot))
+    try:
+        await asyncio.gather(sync_task, jobs_task)
+    finally:
+        sync_task.cancel()
+        jobs_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await sync_task
+        with contextlib.suppress(asyncio.CancelledError):
+            await jobs_task
+        await context.nodes.close()
+        await bot.session.close()
+        await context.engine.dispose()
 
 
 async def background_sync(context: AppContext) -> None:
@@ -59,3 +90,18 @@ async def background_sync(context: AppContext) -> None:
         except Exception:  # noqa: BLE001
             logging.exception("Traffic sync failed")
         await asyncio.sleep(context.settings.app.sync_interval_seconds)
+
+
+async def background_jobs(context: AppContext, bot: Bot) -> None:
+    while True:
+        try:
+            processed = 0
+            while processed < 20:
+                async with context.session_factory() as session:
+                    did_work = await process_one_job(session, context.settings, context.nodes, bot)
+                if not did_work:
+                    break
+                processed += 1
+        except Exception:  # noqa: BLE001
+            logging.exception("Job worker failed")
+        await asyncio.sleep(context.settings.app.worker_interval_seconds)

@@ -13,6 +13,7 @@ from sqlalchemy.orm import selectinload
 
 from vpn_bot.config import PlanDefinition, Settings, TrafficPolicySettings
 from vpn_bot.models import Invoice, InvoiceStatus, Subscription, SubscriptionStatus, User
+from vpn_bot.services.crypto import decrypt_value, encrypt_value
 from vpn_bot.services.nodes import NodeRegistry
 from vpn_bot.services.xui import TrafficSnapshot, XUIClient
 from vpn_bot.utils import ensure_utc, utc_now
@@ -31,6 +32,20 @@ def build_xui_email(tg_id: int, invoice_id: int, plan_code: str) -> str:
 
 def build_manual_xui_email(tg_id: int, plan_code: str) -> str:
     return f"tg{tg_id}-{plan_code}-manual-{uuid4().hex[:8]}@vpn.local".lower()
+
+
+def encrypt_subscription_field(value: str, settings: Settings) -> str:
+    return encrypt_value(value, settings.app.field_encryption_key) or value
+
+
+def decrypt_subscription_field(value: str, settings: Optional[Settings]) -> str:
+    if settings is None:
+        return value
+    return decrypt_value(value, settings.app.field_encryption_key) or value
+
+
+def get_subscription_access_url(subscription: Subscription, settings: Settings) -> str:
+    return decrypt_subscription_field(subscription.access_url, settings)
 
 
 async def activate_invoice(
@@ -73,9 +88,9 @@ async def activate_invoice(
         plan_title=invoice.plan_title,
         status=SubscriptionStatus.active.value,
         node_code=node.node_code,
-        xui_client_id=provisioned.client_id,
-        xui_email=provisioned.email,
-        access_url=provisioned.access_url,
+        xui_client_id=encrypt_subscription_field(provisioned.client_id, settings),
+        xui_email=encrypt_subscription_field(provisioned.email, settings),
+        access_url=encrypt_subscription_field(provisioned.access_url, settings),
         traffic_limit_bytes=invoice.traffic_limit_bytes,
         started_at=now,
         ends_at=expires_at,
@@ -124,9 +139,9 @@ async def provision_subscription_for_user(
         plan_title=plan_title,
         status=SubscriptionStatus.active.value,
         node_code=node.node_code,
-        xui_client_id=provisioned.client_id,
-        xui_email=provisioned.email,
-        access_url=provisioned.access_url,
+        xui_client_id=encrypt_subscription_field(provisioned.client_id, settings),
+        xui_email=encrypt_subscription_field(provisioned.email, settings),
+        access_url=encrypt_subscription_field(provisioned.access_url, settings),
         traffic_limit_bytes=traffic_limit_bytes,
         started_at=now,
         ends_at=expires_at,
@@ -156,7 +171,7 @@ async def revoke_subscription(
     panel = nodes.get_client(node.node_code)
     await panel.set_client_enabled(
         node.inbound_id,
-        client_id=subscription.xui_client_id,
+        client_id=decrypt_subscription_field(subscription.xui_client_id, settings),
         enabled=False,
     )
     subscription.status = SubscriptionStatus.revoked.value
@@ -208,7 +223,7 @@ async def sync_active_subscriptions(
             continue
 
         for subscription in node_subscriptions:
-            snapshot = traffic_map.get(subscription.xui_email)
+            snapshot = traffic_map.get(decrypt_subscription_field(subscription.xui_email, settings))
             if snapshot is None:
                 continue
             subscription.upload_bytes = snapshot.upload_bytes
@@ -261,7 +276,7 @@ async def _apply_daily_traffic_policy(
 
     await panel.update_client_speed_limit(
         node_inbound_id or settings.xui.inbound_id,
-        client_id=subscription.xui_client_id,
+        client_id=decrypt_subscription_field(subscription.xui_client_id, settings),
         speed_limit_kbytes_per_second=target_speed_limit,
     )
     subscription.speed_limit_kbytes_per_second = target_speed_limit
@@ -316,6 +331,8 @@ async def get_open_invoices_for_user(session: AsyncSession, user_id: int) -> lis
                     [
                         InvoiceStatus.awaiting_transfer.value,
                         InvoiceStatus.pending_review.value,
+                        InvoiceStatus.paid_pending_provision.value,
+                        InvoiceStatus.provision_failed.value,
                     ]
                 ),
             )
@@ -324,7 +341,7 @@ async def get_open_invoices_for_user(session: AsyncSession, user_id: int) -> lis
     )
 
 
-def format_subscription_lines(subscriptions: Iterable[Subscription]) -> str:
+def format_subscription_lines(subscriptions: Iterable[Subscription], settings: Optional[Settings] = None) -> str:
     blocks: list[str] = []
     for item in subscriptions:
         blocks.append(
@@ -333,7 +350,7 @@ def format_subscription_lines(subscriptions: Iterable[Subscription]) -> str:
                     f"<b>{item.plan_title}</b>",
                     f"Трафик: <code>{item.traffic_used_bytes}</code> / <code>{item.traffic_limit_bytes}</code> байт",
                     f"До: {ensure_utc(item.ends_at).astimezone().strftime('%Y-%m-%d %H:%M')}",
-                    f"Ссылка: <code>{item.access_url}</code>",
+                    f"Ссылка: <code>{decrypt_subscription_field(item.access_url, settings)}</code>",
                 ]
             )
         )

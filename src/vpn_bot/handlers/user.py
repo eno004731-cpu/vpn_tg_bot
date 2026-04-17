@@ -23,6 +23,7 @@ from vpn_bot.keyboards import (
 )
 from vpn_bot.models import Invoice, InvoiceStatus
 from vpn_bot.runtime import AppContext
+from vpn_bot.services.jobs import schedule_invoice_provisioning
 from vpn_bot.services.payments import (
     build_stars_payload,
     build_stars_reference,
@@ -34,7 +35,6 @@ from vpn_bot.services.payments import (
     parse_stars_payload,
 )
 from vpn_bot.services.subscriptions import (
-    activate_invoice,
     get_open_invoices_for_user,
     get_user_active_subscriptions,
 )
@@ -178,29 +178,33 @@ async def stars_successful_payment(message: Message, app_context: AppContext) ->
 
     reference_code = build_stars_reference(payment.telegram_payment_charge_id)
     async with app_context.session_factory() as session:
+        user = await ensure_user(session, message.from_user, app_context.settings.app.admin_ids)
+        invoice = await session.scalar(select(Invoice).where(Invoice.reference_code == reference_code))
+        if invoice is None:
+            invoice = await create_stars_invoice_record(
+                session,
+                user,
+                plan,
+                payment.telegram_payment_charge_id,
+                payment.total_amount,
+            )
+        await session.flush()
         try:
-            user = await ensure_user(session, message.from_user, app_context.settings.app.admin_ids)
-            invoice = await session.scalar(select(Invoice).where(Invoice.reference_code == reference_code))
-            if invoice is None:
-                invoice = await create_stars_invoice_record(
-                    session,
-                    user,
-                    plan,
-                    payment.telegram_payment_charge_id,
-                    payment.total_amount,
-                )
-            result = await activate_invoice(session, app_context.settings, app_context.nodes, invoice.id)
+            await schedule_invoice_provisioning(session, app_context.settings, app_context.nodes, invoice.id)
         except Exception as exc:  # noqa: BLE001
-            logging.exception("Failed to activate Stars payment %s", reference_code)
-            refunded = await _refund_failed_stars_payment(message, payment.telegram_payment_charge_id)
-            await _notify_admins_about_stars_activation_error(message, app_context, reference_code, exc)
-            refund_line = "Stars возвращены автоматически." if refunded else "Не удалось автоматически вернуть Stars."
+            logging.exception("Failed to schedule Stars payment %s provisioning", reference_code)
+            invoice.status = InvoiceStatus.provision_failed.value
+            if invoice.paid_at is None:
+                invoice.paid_at = utc_now()
+            await session.commit()
+            await _notify_admins_about_stars_schedule_error(message, app_context, reference_code, exc)
             await message.answer(
-                (
-                    "Оплата Stars прошла, но доступ не активировался автоматически.\n"
-                    f"Код платежа: <code>{escape(reference_code)}</code>\n"
-                    f"{refund_line}\n"
-                    "Я уже сообщил администратору."
+                "\n".join(
+                    [
+                        "<b>Оплата Stars подтверждена</b>",
+                        f"Код платежа: <code>{escape(reference_code)}</code>",
+                        "Но очередь выдачи не создалась. Администратор уже видит ошибку, Stars не потеряны.",
+                    ]
                 )
             )
             return
@@ -209,9 +213,9 @@ async def stars_successful_payment(message: Message, app_context: AppContext) ->
         "\n".join(
             [
                 "<b>Оплата Stars подтверждена</b>",
-                f"Тариф: {escape(result.subscription.plan_title)}",
-                f"Ссылка: <code>{escape(result.subscription.access_url)}</code>",
-                f"Действует до: {ensure_utc(result.subscription.ends_at).astimezone().strftime('%Y-%m-%d %H:%M')}",
+                f"Код платежа: <code>{escape(reference_code)}</code>",
+                "Доступ активируется автоматически. Если 3x-ui временно недоступна, worker повторит выдачу.",
+                "Ссылку можно будет открыть через /my.",
             ]
         )
     )
@@ -264,11 +268,19 @@ async def my_subscription(message: Message, app_context: AppContext) -> None:
         await session.commit()
 
     if subscriptions:
-        await message.answer(format_user_subscriptions(subscriptions))
+        await message.answer(format_user_subscriptions(subscriptions, app_context.settings.app.field_encryption_key))
         return
 
     if open_invoices:
         invoice = open_invoices[0]
+        if invoice.status == InvoiceStatus.paid_pending_provision.value:
+            await message.answer("Оплата подтверждена, доступ активируется. Обычно это занимает меньше минуты.")
+            return
+        if invoice.status == InvoiceStatus.provision_failed.value:
+            await message.answer(
+                "Оплата подтверждена, но автоматическая выдача пока не удалась. Администратор уже видит эту ошибку."
+            )
+            return
         await message.answer(
             (f"У вас есть незавершённый инвойс:\n{format_invoice_for_user(invoice, app_context.settings.payment)}"),
             reply_markup=invoice_keyboard(invoice.id),
@@ -305,7 +317,7 @@ def _format_plan_payment_choice(plan: PlanDefinition) -> str:
     return "\n".join(lines)
 
 
-async def _notify_admins_about_stars_activation_error(
+async def _notify_admins_about_stars_schedule_error(
     message: Message,
     app_context: AppContext,
     reference_code: str,
@@ -317,7 +329,7 @@ async def _notify_admins_about_stars_activation_error(
                 admin_id,
                 "\n".join(
                     [
-                        "<b>Ошибка активации Stars-платежа</b>",
+                        "<b>Ошибка постановки Stars-платежа в очередь</b>",
                         f"Код платежа: <code>{escape(reference_code)}</code>",
                         f"Пользователь: <code>{message.from_user.id if message.from_user else '-'}</code>",
                         f"Ошибка: <code>{escape(str(exc))}</code>",
@@ -325,17 +337,4 @@ async def _notify_admins_about_stars_activation_error(
                 ),
             )
         except TelegramAPIError:
-            logging.exception("Failed to notify admin %s about Stars activation error", admin_id)
-
-
-async def _refund_failed_stars_payment(message: Message, telegram_payment_charge_id: str) -> bool:
-    if message.from_user is None:
-        return False
-    try:
-        return await message.bot.refund_star_payment(
-            user_id=message.from_user.id,
-            telegram_payment_charge_id=telegram_payment_charge_id,
-        )
-    except TelegramAPIError:
-        logging.exception("Failed to refund Stars payment %s", telegram_payment_charge_id)
-        return False
+            logging.exception("Failed to notify admin %s about Stars schedule error", admin_id)

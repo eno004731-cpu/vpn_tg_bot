@@ -67,7 +67,6 @@ SENSITIVE_CONFIG_KEYS = {
     "card_number",
     "password",
     "phone",
-    "public_host",
     "receiver_name",
     "username",
 }

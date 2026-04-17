@@ -5,7 +5,7 @@ from decimal import Decimal
 from enum import Enum
 from typing import Optional
 
-from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, Numeric, String, Text
+from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -20,6 +20,8 @@ class Base(DeclarativeBase):
 class InvoiceStatus(str, Enum):
     awaiting_transfer = "awaiting_transfer"
     pending_review = "pending_review"
+    paid_pending_provision = "paid_pending_provision"
+    provision_failed = "provision_failed"
     paid = "paid"
     rejected = "rejected"
     expired = "expired"
@@ -29,6 +31,18 @@ class SubscriptionStatus(str, Enum):
     active = "active"
     expired = "expired"
     revoked = "revoked"
+
+
+class JobType(str, Enum):
+    provision_access = "provision_access"
+    send_access_message = "send_access_message"
+
+
+class JobStatus(str, Enum):
+    pending = "pending"
+    running = "running"
+    succeeded = "succeeded"
+    failed = "failed"
 
 
 class User(Base):
@@ -92,8 +106,30 @@ class Subscription(Base):
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     ends_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     last_synced_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    access_sent_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
 
     user: Mapped["User"] = relationship(back_populates="subscriptions")
     source_invoice: Mapped[Optional["Invoice"]] = relationship(back_populates="subscriptions")
+
+
+class Job(Base):
+    __tablename__ = "jobs"
+    __table_args__ = (UniqueConstraint("idempotency_key", name="uq_jobs_idempotency_key"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    type: Mapped[str] = mapped_column(String(64), index=True)
+    status: Mapped[str] = mapped_column(String(32), default=JobStatus.pending.value, index=True)
+    idempotency_key: Mapped[str] = mapped_column(String(255), unique=True, index=True)
+    invoice_id: Mapped[Optional[int]] = mapped_column(ForeignKey("invoices.id"), index=True)
+    subscription_id: Mapped[Optional[int]] = mapped_column(ForeignKey("subscriptions.id"), index=True)
+    user_id: Mapped[Optional[int]] = mapped_column(ForeignKey("users.id"), index=True)
+    payload: Mapped[Optional[str]] = mapped_column(Text)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    max_attempts: Mapped[int] = mapped_column(Integer, default=10)
+    run_after: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
+    locked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    last_error: Mapped[Optional[str]] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)

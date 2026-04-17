@@ -27,7 +27,15 @@ class AppSettings:
     bot_token: str
     admin_ids: Tuple[int, ...]
     database_path: Path
+    database_url: Optional[str] = None
     sync_interval_seconds: int = 300
+    worker_interval_seconds: int = 5
+    web_host: str = "0.0.0.0"
+    web_port: int = 8080
+    webhook_path_secret: Optional[str] = None
+    webhook_secret_token: Optional[str] = None
+    public_webhook_base_url: str = "https://panel.swift-log.ru"
+    field_encryption_key: Optional[str] = None
 
 
 @dataclass
@@ -279,6 +287,7 @@ def load_settings() -> Settings:
     database_path = Path(database_path_raw)
     if not database_path.is_absolute():
         database_path = BASE_DIR / database_path
+    database_url = _coalesce(os.getenv("VPN_BOT_DATABASE_URL"), app.get("database_url"))
 
     xui_settings, xui_nodes = _load_xui_settings(xui)
 
@@ -306,8 +315,33 @@ def load_settings() -> Settings:
             bot_token=bot_token,
             admin_ids=admin_ids,
             database_path=database_path,
+            database_url=database_url,
             sync_interval_seconds=_coalesce(
                 _env_int("VPN_BOT_SYNC_INTERVAL"), app.get("sync_interval_seconds"), default=300
+            ),
+            worker_interval_seconds=_coalesce(
+                _env_int("VPN_BOT_WORKER_INTERVAL_SECONDS"),
+                app.get("worker_interval_seconds"),
+                default=5,
+            ),
+            web_host=_coalesce(os.getenv("VPN_BOT_WEB_HOST"), app.get("web_host"), default="0.0.0.0"),
+            web_port=int(_coalesce(_env_int("VPN_BOT_WEB_PORT"), app.get("web_port"), default=8080)),
+            webhook_path_secret=_coalesce(
+                os.getenv("VPN_BOT_WEBHOOK_PATH_SECRET"),
+                app.get("webhook_path_secret"),
+            ),
+            webhook_secret_token=_coalesce(
+                os.getenv("VPN_BOT_WEBHOOK_SECRET_TOKEN"),
+                app.get("webhook_secret_token"),
+            ),
+            public_webhook_base_url=_coalesce(
+                os.getenv("VPN_BOT_PUBLIC_WEBHOOK_BASE_URL"),
+                app.get("public_webhook_base_url"),
+                default="https://panel.swift-log.ru",
+            ),
+            field_encryption_key=_coalesce(
+                os.getenv("VPN_BOT_FIELD_ENCRYPTION_KEY"),
+                app.get("field_encryption_key"),
             ),
         ),
         payment=PaymentSettings(

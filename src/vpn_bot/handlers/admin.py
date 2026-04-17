@@ -33,9 +33,10 @@ from vpn_bot.keyboards import (
 )
 from vpn_bot.models import Invoice, InvoiceStatus, Subscription, SubscriptionStatus, User
 from vpn_bot.runtime import AppContext
+from vpn_bot.services.jobs import schedule_invoice_provisioning
 from vpn_bot.services.payments import reject_invoice
 from vpn_bot.services.subscriptions import (
-    activate_invoice,
+    get_subscription_access_url,
     provision_subscription_for_user,
     revoke_subscription,
     sync_active_subscriptions,
@@ -49,6 +50,8 @@ ADMIN_INVOICES_PAGE_SIZE = 10
 OPEN_INVOICE_STATUSES = (
     InvoiceStatus.awaiting_transfer.value,
     InvoiceStatus.pending_review.value,
+    InvoiceStatus.paid_pending_provision.value,
+    InvoiceStatus.provision_failed.value,
 )
 
 
@@ -198,7 +201,7 @@ async def grant_plan(callback: CallbackQuery, callback_data: AdminGrantPlan, app
             [
                 "<b>Администратор выдал доступ</b>",
                 f"Тариф: {escape(subscription.plan_title)}",
-                f"Ссылка: <code>{escape(subscription.access_url)}</code>",
+                f"Ссылка: <code>{escape(get_subscription_access_url(subscription, app_context.settings))}</code>",
                 f"Действует до: {ensure_utc(subscription.ends_at).astimezone().strftime('%Y-%m-%d %H:%M')}",
             ]
         ),
@@ -285,32 +288,24 @@ async def reject_command(message: Message, command: CommandObject, app_context: 
 async def _approve_invoice(target: Union[Message, CallbackQuery], invoice_id: int, app_context: AppContext) -> None:
     async with app_context.session_factory() as session:
         try:
-            result = await activate_invoice(session, app_context.settings, app_context.nodes, invoice_id)
+            await schedule_invoice_provisioning(session, app_context.settings, app_context.nodes, invoice_id)
         except Exception as exc:  # noqa: BLE001
-            logging.exception("Failed to activate invoice %s", invoice_id)
+            logging.exception("Failed to schedule invoice %s provisioning", invoice_id)
             try:
                 if isinstance(target, CallbackQuery):
                     await target.message.answer(
-                        f"Не удалось активировать инвойс <code>{invoice_id}</code>: {escape(str(exc))}"
+                        f"Не удалось поставить инвойс <code>{invoice_id}</code> в очередь выдачи: {escape(str(exc))}"
                     )
                 else:
-                    await target.answer(f"Не удалось активировать инвойс: {exc}")
+                    await target.answer(f"Не удалось поставить инвойс в очередь выдачи: {exc}")
             except TelegramAPIError:
-                logging.exception("Failed to notify admin about invoice %s activation error", invoice_id)
+                logging.exception("Failed to notify admin about invoice %s provisioning error", invoice_id)
             return
 
-    access_text = "\n".join(
-        [
-            "<b>Оплата подтверждена</b>",
-            f"Тариф: {escape(result.subscription.plan_title)}",
-            f"Трафик: {result.subscription.traffic_limit_bytes} байт",
-            f"Ссылка: <code>{escape(result.subscription.access_url)}</code>",
-            f"Действует до: {ensure_utc(result.subscription.ends_at).astimezone().strftime('%Y-%m-%d %H:%M')}",
-        ]
+    confirmation = (
+        f"Инвойс <code>{invoice_id}</code> подтверждён и поставлен в очередь выдачи. "
+        "Пользователь получит ссылку после обработки worker."
     )
-    await target.bot.send_message(result.user.tg_id, access_text)
-
-    confirmation = f"Инвойс <code>{invoice_id}</code> подтверждён."
     if isinstance(target, CallbackQuery):
         await target.message.edit_text(confirmation)
     else:

@@ -1,0 +1,62 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: xui-panel
+  namespace: vpn-prod
+  labels:
+    cutover: manual
+spec:
+  selector:
+    app: xui
+  ports:
+    - name: panel
+      port: 8443
+      targetPort: panel
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: xui
+  namespace: vpn-prod
+  labels:
+    cutover: manual
+spec:
+  serviceName: xui-panel
+  replicas: 0
+  selector:
+    matchLabels:
+      app: xui
+  template:
+    metadata:
+      labels:
+        app: xui
+        cutover: manual
+    spec:
+      containers:
+        - name: xui
+          image: ghcr.io/mhsanaei/3x-ui:latest
+          ports:
+            - name: panel
+              containerPort: 8443
+            - name: vpn-test
+              containerPort: 150674
+              hostPort: 150674
+          volumeMounts:
+            - name: xui-data
+              mountPath: /etc/x-ui
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 1000m
+              memory: 1Gi
+  volumeClaimTemplates:
+    - metadata:
+        name: xui-data
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        resources:
+          requests:
+            storage: 5Gi

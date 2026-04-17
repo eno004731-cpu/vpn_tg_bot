@@ -38,6 +38,7 @@ def write_runtime_config(tmp_path, xui_block: str) -> None:
 bot_token = "123456:telegram-bot-token"
 admin_ids = [123456789]
 database_path = "data/bot.sqlite3"
+database_url = "postgresql://vpn:secret@postgres:5432/vpn_bot"
 
 [payment]
 bank_name = "Demo Bank"
@@ -71,6 +72,7 @@ public_port = 443
     settings = load_settings()
 
     assert settings.xui.node_code == "main"
+    assert settings.app.database_url == "postgresql://vpn:secret@postgres:5432/vpn_bot"
     assert settings.xui.public_host == "vpn.example.com"
     assert [node.node_code for node in settings.all_xui_nodes] == ["main"]
 
