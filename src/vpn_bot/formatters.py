@@ -4,16 +4,18 @@ from html import escape
 from typing import Iterable, Optional
 
 from vpn_bot.models import Invoice, Subscription, User
+from vpn_bot.services.crypto import decrypt_value
 from vpn_bot.services.nodes import NodeStatus
 from vpn_bot.utils import ensure_utc, format_bytes
 
 
-def format_user_subscriptions(subscriptions: Iterable[Subscription]) -> str:
+def format_user_subscriptions(subscriptions: Iterable[Subscription], field_encryption_key: Optional[str] = None) -> str:
     parts: list[str] = []
     for subscription in subscriptions:
         traffic_usage = (
             f"{format_bytes(subscription.traffic_used_bytes)} / {format_bytes(subscription.traffic_limit_bytes)}"
         )
+        access_url = decrypt_value(subscription.access_url, field_encryption_key) or subscription.access_url
         parts.append(
             "\n".join(
                 [
@@ -22,7 +24,7 @@ def format_user_subscriptions(subscriptions: Iterable[Subscription]) -> str:
                     f"Загрузка: {format_bytes(subscription.download_bytes)}",
                     f"Отдача: {format_bytes(subscription.upload_bytes)}",
                     f"Действует до: {ensure_utc(subscription.ends_at).astimezone().strftime('%Y-%m-%d %H:%M')}",
-                    f"Ссылка: <code>{escape(subscription.access_url)}</code>",
+                    f"Ссылка: <code>{escape(access_url)}</code>",
                 ]
             )
         )

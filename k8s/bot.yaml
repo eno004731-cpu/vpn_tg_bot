@@ -1,0 +1,123 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vpn-bot-env
+  namespace: vpn-prod
+data:
+  VPN_BOT_SECRETS_FILE: /vault/secrets/runtime.toml
+  VPN_BOT_PLANS_FILE: /app/config/plans.toml
+  VPN_BOT_WEB_HOST: 0.0.0.0
+  VPN_BOT_WEB_PORT: "8080"
+  VPN_BOT_PUBLIC_WEBHOOK_BASE_URL: https://panel.swift-log.ru
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vpn-bot-web
+  namespace: vpn-prod
+spec:
+  selector:
+    app: vpn-bot-web
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vpn-bot-web
+  namespace: vpn-prod
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: vpn-bot-web
+  template:
+    metadata:
+      labels:
+        app: vpn-bot-web
+      annotations:
+        vault.hashicorp.com/agent-inject: "true"
+        vault.hashicorp.com/role: vpn-bot
+        vault.hashicorp.com/agent-inject-secret-runtime.toml: kv/data/vpn-bot/runtime
+        vault.hashicorp.com/agent-inject-template-runtime.toml: |
+          {{- with secret "kv/data/vpn-bot/runtime" -}}
+          {{ .Data.data.runtime_toml }}
+          {{- end -}}
+    spec:
+      serviceAccountName: vpn-bot
+      containers:
+        - name: vpn-bot
+          image: ghcr.io/eno004731-cpu/vpn_tg_bot:latest
+          imagePullPolicy: IfNotPresent
+          command:
+            - vpn-bot
+            - web
+          envFrom:
+            - configMapRef:
+                name: vpn-bot-env
+          ports:
+            - name: http
+              containerPort: 8080
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vpn-bot-worker
+  namespace: vpn-prod
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: vpn-bot-worker
+  template:
+    metadata:
+      labels:
+        app: vpn-bot-worker
+      annotations:
+        vault.hashicorp.com/agent-inject: "true"
+        vault.hashicorp.com/role: vpn-bot
+        vault.hashicorp.com/agent-inject-secret-runtime.toml: kv/data/vpn-bot/runtime
+        vault.hashicorp.com/agent-inject-template-runtime.toml: |
+          {{- with secret "kv/data/vpn-bot/runtime" -}}
+          {{ .Data.data.runtime_toml }}
+          {{- end -}}
+    spec:
+      serviceAccountName: vpn-bot
+      containers:
+        - name: vpn-bot
+          image: ghcr.io/eno004731-cpu/vpn_tg_bot:latest
+          imagePullPolicy: IfNotPresent
+          command:
+            - vpn-bot
+            - worker
+          envFrom:
+            - configMapRef:
+                name: vpn-bot-env
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi

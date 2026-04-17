@@ -1,0 +1,25 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: vpn-bot-web
+  namespace: vpn-prod
+  annotations:
+    kubernetes.io/ingress.class: nginx
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/proxy-body-size: 1m
+spec:
+  tls:
+    - hosts:
+        - panel.swift-log.ru
+      secretName: panel-swift-log-ru-tls
+  rules:
+    - host: panel.swift-log.ru
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: vpn-bot-web
+                port:
+                  name: http

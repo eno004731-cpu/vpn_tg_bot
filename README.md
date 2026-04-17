@@ -28,9 +28,10 @@ Telegram-бот для продажи VPN-подписок с интеграци
 ## Что внутри
 
 - `aiogram` для Telegram-бота;
-- `SQLAlchemy + SQLite` для хранения пользователей, инвойсов и подписок;
+- `SQLAlchemy + SQLite/Postgres` для хранения пользователей, инвойсов, подписок и очереди выдачи;
 - HTTP-клиент к `3x-ui`, который создаёт клиента и читает статистику трафика;
-- полуавтоматическая схема оплаты без эквайринга: уникальная сумма + ручное подтверждение админом.
+- полуавтоматическая схема оплаты без эквайринга: уникальная сумма + ручное подтверждение админом;
+- webhook-режим для Telegram, healthcheck endpoints и worker с retry-очередью.
 
 ## Быстрый старт
 
@@ -66,6 +67,15 @@ vpn-bot init-db
 vpn-bot run
 ```
 
+`vpn-bot run` остаётся polling-режимом для простого запуска и rollback. Для Kubernetes используются две роли:
+
+```bash
+vpn-bot web
+vpn-bot worker
+```
+
+`web` принимает Telegram webhook и отвечает на `/healthz` и `/readyz`. `worker` выдаёт доступ в `3x-ui`, ретраит ошибки, синкает трафик и отправляет пользователю ссылку.
+
 ## Как устроена оплата без платёжной системы
 
 Сейчас бот работает по безопасной для MVP схеме:
@@ -74,14 +84,16 @@ vpn-bot run
 2. Бот выдаёт перевод на карту/телефон с уникальной суммой, например `299.17 ₽`.
 3. Пользователь нажимает кнопку "Я оплатил".
 4. Админу приходит карточка на подтверждение.
-5. После подтверждения бот создаёт клиента в `3x-ui` и отправляет ссылку.
+5. После подтверждения бот фиксирует оплату и создаёт job выдачи.
+6. Worker создаёт клиента в `3x-ui` и отправляет ссылку. Если `3x-ui` временно недоступна, job ретраится.
 
 Telegram Stars работают параллельно:
 
 1. Пользователь выбирает тариф.
 2. Нажимает оплату Stars.
 3. Telegram присылает `successful_payment`.
-4. Бот сам создаёт клиента в `3x-ui` и отправляет ссылку.
+4. Бот сохраняет платёж и создаёт job выдачи.
+5. Worker выдаёт доступ. Повторный webhook от Telegram не создаёт дубль.
 
 В `config/plans.toml` есть тестовый пункт `stars_test` за 1 звезду. Он нужен только для проверки оплаты и не выдаёт VPN-доступ.
 
@@ -125,6 +137,23 @@ timezone = "Europe/Moscow"
 - `secrets/` игнорируется git;
 - `secrets/` исключён из Docker-контекста через `.dockerignore`;
 - в прод контейнер монтирует секреты как read-only volume.
+- в Kubernetes Vault Agent должен рендерить тот же файл в `/vault/secrets/runtime.toml`;
+- если задан `field_encryption_key`, новые `access_url`, `xui_client_id`, `xui_email` пишутся в БД как `enc:v1:...`.
+
+Для Postgres можно указать URL через env или TOML:
+
+```toml
+[app]
+database_url = "postgresql://vpn_bot:change-me@postgres.vpn-prod.svc.cluster.local:5432/vpn_bot"
+```
+
+Если `database_url` не задан, бот продолжит работать на SQLite по `database_path`.
+
+Миграция SQLite в database URL:
+
+```bash
+vpn-bot migrate-sqlite-to-postgres --sqlite data/bot.sqlite3 --database-url "$VPN_BOT_DATABASE_URL"
+```
 
 ## Основные команды
 
@@ -142,6 +171,8 @@ timezone = "Europe/Moscow"
 - `/nodes`
 - `/admin users [username|id]`
 - `/users [username|id]`
+- `/admin invoices`
+- `/invoices`
 - `/traffic_admin`
 - `/approve <invoice_id>`
 - `/reject <invoice_id> [причина]`
@@ -198,6 +229,31 @@ public_port = 443
 
 Подробный выбор стека и протокола описан в [docs/vpn-stack.md](docs/vpn-stack.md).
 Как готовить перенос на другие серверы: [docs/scaling.md](docs/scaling.md).
+
+## Kubernetes/Webhook
+
+Манифесты лежат в `k8s/`:
+
+- `vpn-bot-web` — `Deployment` на 2 реплики, принимает Telegram webhook;
+- `vpn-bot-worker` — `Deployment` на 1 реплику, обрабатывает outbox/jobs;
+- `postgres` — `StatefulSet`;
+- `vault` — `StatefulSet`;
+- `vpn-bot-web` — `Service`;
+- `Ingress` для `panel.swift-log.ru`;
+- `xui-template.yaml` — подготовка 3x-ui на тестовых портах, не включена в `kustomization.yaml`.
+
+Базовая проверка:
+
+```bash
+kubectl apply -k k8s
+kubectl rollout status deployment/vpn-bot-web -n vpn-prod
+kubectl rollout status deployment/vpn-bot-worker -n vpn-prod
+kubectl rollout status statefulset/postgres -n vpn-prod
+curl https://panel.swift-log.ru/healthz
+curl https://panel.swift-log.ru/readyz
+```
+
+Текущий `x-ui`/VPN на systemd эти манифесты не трогают. Переключать Telegram webhook можно только после миграции базы и проверки `web/worker`. Подробный порядок: [docs/kubernetes-rollout.md](docs/kubernetes-rollout.md).
 
 ## Перед публикацией
 
