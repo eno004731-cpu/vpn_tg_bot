@@ -32,6 +32,11 @@ UPDATE_CLIENT_PATHS = (
     "panel/api/inbound/updateClient/{client_id}",
     "panel/inbound/updateClient/{client_id}",
 )
+DELETE_CLIENT_PATHS = (
+    "panel/api/inbounds/{inbound_id}/delClient/{client_id}",
+    "panel/api/inbound/{inbound_id}/delClient/{client_id}",
+    "panel/inbound/{inbound_id}/delClient/{client_id}",
+)
 
 
 @dataclass(frozen=True)
@@ -213,10 +218,21 @@ class XUIClient:
         )
 
     async def set_client_enabled(self, inbound_id: int, *, client_id: str, enabled: bool) -> None:
-        changes: dict[str, Any] = {"enable": enabled}
         if not enabled:
-            changes["speedLimit"] = 0
+            await self.delete_client(inbound_id, client_id=client_id)
+            return
+        changes: dict[str, Any] = {"enable": enabled}
         await self._update_client(inbound_id, client_id=client_id, changes=changes)
+
+    async def delete_client(self, inbound_id: int, *, client_id: str) -> None:
+        paths = tuple(
+            path.format(
+                inbound_id=inbound_id,
+                client_id=quote(client_id, safe=""),
+            )
+            for path in DELETE_CLIENT_PATHS
+        )
+        await self._request_with_fallback("POST", paths)
 
     async def fetch_traffic_map(self) -> dict[str, TrafficSnapshot]:
         inbounds = await self.list_inbounds()

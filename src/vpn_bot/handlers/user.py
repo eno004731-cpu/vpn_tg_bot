@@ -37,7 +37,6 @@ from vpn_bot.services.subscriptions import (
     activate_invoice,
     get_open_invoices_for_user,
     get_user_active_subscriptions,
-    sync_active_subscriptions,
 )
 from vpn_bot.services.users import ensure_user
 from vpn_bot.utils import ensure_utc, utc_now
@@ -260,7 +259,6 @@ async def invoice_paid(callback: CallbackQuery, callback_data: InvoiceAction, ap
 async def my_subscription(message: Message, app_context: AppContext) -> None:
     async with app_context.session_factory() as session:
         user = await ensure_user(session, message.from_user, app_context.settings.app.admin_ids)
-        await sync_active_subscriptions(session, app_context.panel, app_context.settings, app_context.plans)
         subscriptions = await get_user_active_subscriptions(session, user.id)
         open_invoices = await get_open_invoices_for_user(session, user.id)
         await session.commit()
