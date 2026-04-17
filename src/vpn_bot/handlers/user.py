@@ -29,6 +29,7 @@ from vpn_bot.services.payments import (
     build_stars_reference,
     create_invoice,
     create_stars_invoice_record,
+    expire_open_invoice,
     format_invoice_for_admin,
     format_invoice_for_user,
     mark_invoice_pending_review,
@@ -235,24 +236,45 @@ async def invoice_paid(callback: CallbackQuery, callback_data: InvoiceAction, ap
         if invoice.status == InvoiceStatus.pending_review.value:
             await callback.answer("Платёж уже отправлен админу на проверку.")
             return
-        if ensure_utc(invoice.expires_at) <= utc_now():
-            invoice.status = InvoiceStatus.expired.value
-            await session.commit()
-            await callback.answer("Срок инвойса уже закончился.", show_alert=True)
+        if invoice.status == InvoiceStatus.paid_pending_provision.value:
+            await callback.answer("Оплата уже подтверждена. Доступ активируется автоматически.")
+            return
+        if invoice.status == InvoiceStatus.provision_failed.value:
+            await callback.answer(
+                "Оплата уже подтверждена, но автоматическая выдача пока не удалась. Администратор уже видит ошибку.",
+                show_alert=True,
+            )
+            return
+        if invoice.status == InvoiceStatus.paid.value:
+            await callback.answer("Оплата по этому инвойсу уже подтверждена.")
+            return
+        if invoice.status == InvoiceStatus.rejected.value:
+            await callback.answer("Этот инвойс уже отклонён.", show_alert=True)
             return
         if invoice.status == InvoiceStatus.expired.value:
             await callback.answer("Срок инвойса уже закончился.", show_alert=True)
             return
+        if ensure_utc(invoice.expires_at) <= utc_now():
+            expire_open_invoice(invoice)
+            await session.commit()
+            await callback.answer("Срок инвойса уже закончился.", show_alert=True)
+            return
         mark_invoice_pending_review(invoice)
+        if invoice.status != InvoiceStatus.pending_review.value:
+            await callback.answer("Инвойс нельзя отправить на проверку.", show_alert=True)
+            return
         await session.commit()
         admin_text = format_invoice_for_admin(invoice, user)
 
     for admin_id in app_context.settings.app.admin_ids:
-        await callback.bot.send_message(
-            admin_id,
-            admin_text,
-            reply_markup=admin_invoice_keyboard(invoice.id),
-        )
+        try:
+            await callback.bot.send_message(
+                admin_id,
+                admin_text,
+                reply_markup=admin_invoice_keyboard(invoice.id),
+            )
+        except TelegramAPIError:
+            logging.exception("Failed to notify admin %s about invoice %s", admin_id, invoice.id)
 
     await callback.answer("Передал платёж админу на проверку.")
     await callback.message.answer("Платёж отправлен на проверку. Как только подтвержу перевод, пришлю доступ.")

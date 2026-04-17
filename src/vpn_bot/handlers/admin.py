@@ -8,7 +8,7 @@ from aiogram import Router
 from aiogram.exceptions import TelegramAPIError
 from aiogram.filters import Command, CommandObject
 from aiogram.types import CallbackQuery, Message
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import selectinload
 
 from vpn_bot.formatters import (
@@ -42,17 +42,26 @@ from vpn_bot.services.subscriptions import (
     sync_active_subscriptions,
 )
 from vpn_bot.services.users import ensure_user
-from vpn_bot.utils import ensure_utc, format_bytes
+from vpn_bot.utils import ensure_utc, format_bytes, utc_now
 
 router = Router(name="admin")
 ADMIN_USERS_PAGE_SIZE = 10
 ADMIN_INVOICES_PAGE_SIZE = 10
 OPEN_INVOICE_STATUSES = (
-    InvoiceStatus.awaiting_transfer.value,
     InvoiceStatus.pending_review.value,
     InvoiceStatus.paid_pending_provision.value,
     InvoiceStatus.provision_failed.value,
 )
+
+
+def _open_invoices_condition(now):
+    return or_(
+        and_(
+            Invoice.status == InvoiceStatus.awaiting_transfer.value,
+            Invoice.expires_at > now,
+        ),
+        Invoice.status.in_(OPEN_INVOICE_STATUSES),
+    )
 
 
 def _is_admin(message_or_callback: Union[Message, CallbackQuery], admin_ids: tuple[int, ...]) -> bool:
@@ -342,14 +351,14 @@ async def _send_open_invoices(
     page: int = 0,
 ) -> None:
     page = max(page, 0)
+    now = utc_now()
+    condition = _open_invoices_condition(now)
     async with app_context.session_factory() as session:
-        total = await session.scalar(
-            select(func.count()).select_from(Invoice).where(Invoice.status.in_(OPEN_INVOICE_STATUSES))
-        )
+        total = await session.scalar(select(func.count()).select_from(Invoice).where(condition))
         invoices = list(
             await session.scalars(
                 select(Invoice)
-                .where(Invoice.status.in_(OPEN_INVOICE_STATUSES))
+                .where(condition)
                 .options(selectinload(Invoice.user))
                 .order_by(Invoice.created_at.desc())
                 .offset(page * ADMIN_INVOICES_PAGE_SIZE)

@@ -7,7 +7,7 @@ from decimal import Decimal
 from html import escape
 from typing import Optional
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from vpn_bot.config import PaymentSettings, PlanDefinition
@@ -66,8 +66,14 @@ async def create_invoice(
     used_kopecks = set(
         await session.scalars(
             select(Invoice.amount_kopecks).where(
-                Invoice.status.in_(OPEN_INVOICE_STATUSES),
                 Invoice.id != invoice.id,
+                or_(
+                    and_(
+                        Invoice.status == InvoiceStatus.awaiting_transfer.value,
+                        Invoice.expires_at > now,
+                    ),
+                    Invoice.status == InvoiceStatus.pending_review.value,
+                ),
             )
         )
     )

@@ -7,7 +7,7 @@ from typing import Iterable, Mapping, Optional
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -322,18 +322,24 @@ async def get_user_active_subscriptions(session: AsyncSession, user_id: int) -> 
 
 
 async def get_open_invoices_for_user(session: AsyncSession, user_id: int) -> list[Invoice]:
+    now = utc_now()
     return list(
         await session.scalars(
             select(Invoice)
             .where(
                 Invoice.user_id == user_id,
-                Invoice.status.in_(
-                    [
-                        InvoiceStatus.awaiting_transfer.value,
-                        InvoiceStatus.pending_review.value,
-                        InvoiceStatus.paid_pending_provision.value,
-                        InvoiceStatus.provision_failed.value,
-                    ]
+                or_(
+                    and_(
+                        Invoice.status == InvoiceStatus.awaiting_transfer.value,
+                        Invoice.expires_at > now,
+                    ),
+                    Invoice.status.in_(
+                        [
+                            InvoiceStatus.pending_review.value,
+                            InvoiceStatus.paid_pending_provision.value,
+                            InvoiceStatus.provision_failed.value,
+                        ]
+                    ),
                 ),
             )
             .order_by(Invoice.created_at.desc())
