@@ -16,7 +16,9 @@ duration_days = 0
 traffic_limit_gb = 0
 daily_limit_gb = 1
 description = "Проверка оплаты."
-provision_access = false
+provision_access = true
+device_limit = 1
+one_time_per_user = true
 """,
         encoding="utf-8",
     )
@@ -25,10 +27,12 @@ provision_access = false
 
     assert plan.supports_stars
     assert not plan.supports_transfer
-    assert not plan.provision_access
+    assert plan.provision_access
     assert plan.price_stars == 1
     assert plan.daily_limit_gb == 1
     assert plan.daily_limit_bytes == 1024 * 1024 * 1024
+    assert plan.device_limit == 1
+    assert plan.one_time_per_user is True
 
 
 def write_runtime_config(tmp_path, xui_block: str) -> None:

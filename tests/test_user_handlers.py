@@ -9,10 +9,10 @@ from aiogram.exceptions import TelegramAPIError
 from aiogram.types import User as TelegramUser
 from sqlalchemy import select
 
-from vpn_bot.config import AppSettings, PaymentSettings, Settings, TrafficPolicySettings, XUISettings
+from vpn_bot.config import AppSettings, PaymentSettings, PlanDefinition, Settings, TrafficPolicySettings, XUISettings
 from vpn_bot.database import build_session_factory, init_db
-from vpn_bot.handlers.user import invoice_paid
-from vpn_bot.keyboards import InvoiceAction
+from vpn_bot.handlers.user import invoice_paid, stars_payment_selected, stars_pre_checkout
+from vpn_bot.keyboards import InvoiceAction, PaymentMethodChoice
 from vpn_bot.models import Invoice, InvoiceStatus, User
 from vpn_bot.runtime import AppContext
 from vpn_bot.services.nodes import NodeRegistry
@@ -54,11 +54,15 @@ class FakeBot:
     def __init__(self, *, fail_chat_ids: tuple[int, ...] = ()) -> None:
         self.fail_chat_ids = set(fail_chat_ids)
         self.messages = []
+        self.invoices = []
 
     async def send_message(self, chat_id: int, text: str, reply_markup=None) -> None:
         if chat_id in self.fail_chat_ids:
             raise TelegramAPIError(SimpleNamespace(__api_method__="sendMessage"), "boom")
         self.messages.append((chat_id, text, reply_markup))
+
+    async def send_invoice(self, **kwargs) -> None:
+        self.invoices.append(kwargs)
 
 
 class FakeMessage:
@@ -80,6 +84,18 @@ class FakeCallback:
         self.answers.append((text, show_alert))
 
 
+class FakePreCheckout:
+    def __init__(self, *, user_id: int, payload: str, total_amount: int) -> None:
+        self.invoice_payload = payload
+        self.currency = "XTR"
+        self.total_amount = total_amount
+        self.from_user = TelegramUser(id=user_id, is_bot=False, first_name="User", username="user")
+        self.answers = []
+
+    async def answer(self, ok: bool, error_message: str | None = None) -> None:
+        self.answers.append((ok, error_message))
+
+
 async def add_invoice(session, *, tg_id: int, status: str) -> Invoice:
     user = User(tg_id=tg_id, username="user", full_name="User")
     session.add(user)
@@ -99,6 +115,19 @@ async def add_invoice(session, *, tg_id: int, status: str) -> Invoice:
     session.add(invoice)
     await session.flush()
     return invoice
+
+
+def make_trial_plan() -> PlanDefinition:
+    return PlanDefinition(
+        code="stars_test",
+        title="3 дня / 30 ГБ",
+        price_rub=Decimal("0.00"),
+        price_stars=1,
+        duration_days=3,
+        traffic_limit_gb=30,
+        device_limit=1,
+        one_time_per_user=True,
+    )
 
 
 async def test_invoice_paid_does_not_re_notify_paid_invoice(tmp_path) -> None:
@@ -154,3 +183,65 @@ async def test_invoice_paid_continues_when_one_admin_notification_fails(tmp_path
     assert callback.message.answers == [
         ("Платёж отправлен на проверку. Как только подтвержу перевод, пришлю доступ.", None)
     ]
+
+
+async def test_stars_payment_selected_blocks_second_trial_purchase(tmp_path) -> None:
+    settings = make_settings(admin_ids=(1,))
+    engine, session_factory = build_session_factory(tmp_path / "bot.sqlite3")
+    await init_db(engine)
+    nodes = NodeRegistry.from_settings(settings)
+    plan = make_trial_plan()
+    context = AppContext(
+        settings=settings,
+        plans={plan.code: plan},
+        engine=engine,
+        session_factory=session_factory,
+        nodes=nodes,
+    )
+    bot = FakeBot()
+    callback = FakeCallback(user_id=123, bot=bot)
+
+    try:
+        async with session_factory() as session:
+            invoice = await add_invoice(session, tg_id=123, status=InvoiceStatus.paid.value)
+            invoice.plan_code = plan.code
+            invoice.paid_at = utc_now()
+            await session.commit()
+
+        await stars_payment_selected(callback, PaymentMethodChoice(code=plan.code, method="stars"), context)
+    finally:
+        await nodes.close()
+        await engine.dispose()
+
+    assert bot.invoices == []
+    assert callback.answers == [("Этот тариф можно купить только один раз.", True)]
+
+
+async def test_stars_pre_checkout_rejects_second_trial_purchase(tmp_path) -> None:
+    settings = make_settings(admin_ids=(1,))
+    engine, session_factory = build_session_factory(tmp_path / "bot.sqlite3")
+    await init_db(engine)
+    nodes = NodeRegistry.from_settings(settings)
+    plan = make_trial_plan()
+    context = AppContext(
+        settings=settings,
+        plans={plan.code: plan},
+        engine=engine,
+        session_factory=session_factory,
+        nodes=nodes,
+    )
+    pre_checkout = FakePreCheckout(user_id=123, payload="stars:stars_test:123", total_amount=1)
+
+    try:
+        async with session_factory() as session:
+            invoice = await add_invoice(session, tg_id=123, status=InvoiceStatus.paid.value)
+            invoice.plan_code = plan.code
+            invoice.paid_at = utc_now()
+            await session.commit()
+
+        await stars_pre_checkout(pre_checkout, context)
+    finally:
+        await nodes.close()
+        await engine.dispose()
+
+    assert pre_checkout.answers == [(False, "Этот тариф можно купить только один раз.")]

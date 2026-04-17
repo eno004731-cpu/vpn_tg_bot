@@ -98,7 +98,7 @@ async def background_jobs(context: AppContext, bot: Bot) -> None:
             processed = 0
             while processed < 20:
                 async with context.session_factory() as session:
-                    did_work = await process_one_job(session, context.settings, context.nodes, bot)
+                    did_work = await process_one_job(session, context.settings, context.nodes, bot, context.plans)
                 if not did_work:
                     break
                 processed += 1

@@ -176,6 +176,7 @@ class XUIClient:
         flow: str,
         telegram_user_id: int,
         comment: str,
+        limit_ip: int = 2,
     ) -> ProvisionedClient:
         inbound = await self.get_inbound(inbound_id)
         client_settings = {
@@ -184,7 +185,7 @@ class XUIClient:
                     "id": client_id,
                     "flow": flow,
                     "email": email,
-                    "limitIp": 2,
+                    "limitIp": max(1, int(limit_ip)),
                     "totalGB": traffic_limit_bytes,
                     "expiryTime": int(expires_at.timestamp() * 1000),
                     "enable": True,

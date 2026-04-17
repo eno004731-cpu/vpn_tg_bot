@@ -108,6 +108,8 @@ class PlanDefinition:
     price_stars: Optional[int] = None
     provision_access: bool = True
     daily_limit_gb: Optional[int] = None
+    device_limit: int = 2
+    one_time_per_user: bool = False
 
     @property
     def traffic_limit_bytes(self) -> int:
@@ -403,6 +405,8 @@ def load_plans(path: Optional[Path] = None) -> dict[str, PlanDefinition]:
             price_stars=int(item["price_stars"]) if item.get("price_stars") is not None else None,
             provision_access=bool(item.get("provision_access", True)),
             daily_limit_gb=int(item["daily_limit_gb"]) if item.get("daily_limit_gb") is not None else None,
+            device_limit=max(1, int(item.get("device_limit", 2))),
+            one_time_per_user=bool(item.get("one_time_per_user", False)),
         )
         plans[plan.code] = plan
     if not plans:

@@ -6,7 +6,7 @@ from pathlib import Path
 
 from sqlalchemy import select
 
-from vpn_bot.config import AppSettings, PaymentSettings, Settings, TrafficPolicySettings, XUISettings
+from vpn_bot.config import AppSettings, PaymentSettings, PlanDefinition, Settings, TrafficPolicySettings, XUISettings
 from vpn_bot.database import build_session_factory, init_db
 from vpn_bot.models import Invoice, InvoiceStatus, Job, JobStatus, JobType, Subscription, User
 from vpn_bot.services.jobs import process_one_job, schedule_invoice_provisioning
@@ -133,6 +133,16 @@ async def test_schedule_invoice_provisioning_creates_pending_job(tmp_path) -> No
 async def test_worker_provisions_access_then_sends_notification(tmp_path) -> None:
     node = make_node()
     settings = make_settings(node)
+    plans = {
+        "starter": PlanDefinition(
+            code="starter",
+            title="Starter",
+            price_rub=Decimal("100.00"),
+            duration_days=30,
+            traffic_limit_gb=1,
+            device_limit=1,
+        )
+    }
     panel = FakePanel()
     nodes = FakeNodes(node, panel)
     bot = FakeBot()
@@ -142,10 +152,10 @@ async def test_worker_provisions_access_then_sends_notification(tmp_path) -> Non
     async with session_factory() as session:
         invoice = await make_invoice(session)
         await session.commit()
-        await schedule_invoice_provisioning(session, settings, nodes, invoice.id)
+        await schedule_invoice_provisioning(session, settings, nodes, invoice.id, plans)
 
     async with session_factory() as session:
-        assert await process_one_job(session, settings, nodes, bot)
+        assert await process_one_job(session, settings, nodes, bot, plans)
 
     async with session_factory() as session:
         subscription = await session.scalar(select(Subscription))
@@ -161,4 +171,5 @@ async def test_worker_provisions_access_then_sends_notification(tmp_path) -> Non
     assert subscription is not None
     assert subscription.access_url.startswith("enc:v1:")
     assert send_job is not None
+    assert panel.add_calls[0][1]["limit_ip"] == 1
     assert bot.messages and bot.messages[0][0] == 123

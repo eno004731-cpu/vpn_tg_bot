@@ -34,6 +34,7 @@ from vpn_bot.services.payments import (
     format_invoice_for_user,
     mark_invoice_pending_review,
     parse_stars_payload,
+    user_has_paid_plan,
 )
 from vpn_bot.services.subscriptions import (
     get_open_invoices_for_user,
@@ -43,6 +44,17 @@ from vpn_bot.services.users import ensure_user
 from vpn_bot.utils import ensure_utc, utc_now
 
 router = Router(name="user")
+
+
+def _one_time_plan_error() -> str:
+    return "Этот тариф можно купить только один раз."
+
+
+async def _user_already_bought_plan(session, telegram_user, admin_ids: tuple[int, ...], plan: PlanDefinition) -> bool:
+    user = await ensure_user(session, telegram_user, admin_ids)
+    if not plan.one_time_per_user:
+        return False
+    return await user_has_paid_plan(session, user.id, plan.code)
 
 
 @router.message(CommandStart())
@@ -92,6 +104,10 @@ async def transfer_payment_selected(
 
     async with app_context.session_factory() as session:
         user = await ensure_user(session, callback.from_user, app_context.settings.app.admin_ids)
+        if plan.one_time_per_user and await user_has_paid_plan(session, user.id, plan.code):
+            await session.commit()
+            await callback.answer(_one_time_plan_error(), show_alert=True)
+            return
         invoice = await create_invoice(session, user, plan, app_context.settings.payment)
 
     await callback.message.answer(
@@ -114,7 +130,15 @@ async def stars_payment_selected(
         return
 
     async with app_context.session_factory() as session:
-        await ensure_user(session, callback.from_user, app_context.settings.app.admin_ids)
+        if await _user_already_bought_plan(
+            session,
+            callback.from_user,
+            app_context.settings.app.admin_ids,
+            plan,
+        ):
+            await session.commit()
+            await callback.answer(_one_time_plan_error(), show_alert=True)
+            return
         await session.commit()
 
     description = plan.description or plan.title
@@ -152,6 +176,18 @@ async def stars_pre_checkout(pre_checkout: PreCheckoutQuery, app_context: AppCon
         await pre_checkout.answer(ok=False, error_message="Платеж создан для другого пользователя.")
         return
 
+    async with app_context.session_factory() as session:
+        if await _user_already_bought_plan(
+            session,
+            pre_checkout.from_user,
+            app_context.settings.app.admin_ids,
+            plan,
+        ):
+            await session.commit()
+            await pre_checkout.answer(ok=False, error_message=_one_time_plan_error())
+            return
+        await session.commit()
+
     await pre_checkout.answer(ok=True)
 
 
@@ -181,6 +217,19 @@ async def stars_successful_payment(message: Message, app_context: AppContext) ->
     async with app_context.session_factory() as session:
         user = await ensure_user(session, message.from_user, app_context.settings.app.admin_ids)
         invoice = await session.scalar(select(Invoice).where(Invoice.reference_code == reference_code))
+        if invoice is None and plan.one_time_per_user and await user_has_paid_plan(session, user.id, plan.code):
+            await session.commit()
+            await _notify_admins_about_stars_schedule_error(
+                message,
+                app_context,
+                reference_code,
+                RuntimeError(f"Повторная покупка одноразового тарифа {plan.code}"),
+            )
+            await message.answer(
+                "Оплата Stars получена, но этот тариф уже был куплен раньше. "
+                "Администратор уже видит ситуацию и поможет вручную."
+            )
+            return
         if invoice is None:
             invoice = await create_stars_invoice_record(
                 session,
@@ -191,7 +240,13 @@ async def stars_successful_payment(message: Message, app_context: AppContext) ->
             )
         await session.flush()
         try:
-            await schedule_invoice_provisioning(session, app_context.settings, app_context.nodes, invoice.id)
+            await schedule_invoice_provisioning(
+                session,
+                app_context.settings,
+                app_context.nodes,
+                invoice.id,
+                app_context.plans,
+            )
         except Exception as exc:  # noqa: BLE001
             logging.exception("Failed to schedule Stars payment %s provisioning", reference_code)
             invoice.status = InvoiceStatus.provision_failed.value

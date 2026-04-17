@@ -5,7 +5,7 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from html import escape
-from typing import Any, Optional
+from typing import Any, Mapping, Optional
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError
@@ -13,11 +13,11 @@ from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from vpn_bot.config import Settings
+from vpn_bot.config import PlanDefinition, Settings
 from vpn_bot.models import Invoice, InvoiceStatus, Job, JobStatus, JobType, Subscription, SubscriptionStatus
 from vpn_bot.services.crypto import decrypt_value, encrypt_value
 from vpn_bot.services.nodes import NodeRegistry
-from vpn_bot.services.subscriptions import build_xui_email
+from vpn_bot.services.subscriptions import build_xui_email, get_plan_device_limit
 from vpn_bot.services.xui import ProvisionedClient
 from vpn_bot.utils import ensure_utc, utc_now
 
@@ -75,6 +75,7 @@ async def schedule_invoice_provisioning(
     settings: Settings,
     nodes: NodeRegistry,
     invoice_id: int,
+    plans: Optional[Mapping[str, PlanDefinition]] = None,
 ) -> Job:
     invoice = await session.scalar(select(Invoice).options(selectinload(Invoice.user)).where(Invoice.id == invoice_id))
     if invoice is None:
@@ -109,6 +110,7 @@ async def schedule_invoice_provisioning(
             "node_code": node.node_code,
             "client_id": client_id,
             "xui_email": build_xui_email(invoice.user.tg_id, invoice.id, invoice.plan_code),
+            "device_limit": get_plan_device_limit(invoice.plan_code, plans),
         }
         job = await create_job_once(
             session,
@@ -160,14 +162,20 @@ async def claim_next_job(session: AsyncSession) -> Optional[Job]:
     return job
 
 
-async def process_one_job(session: AsyncSession, settings: Settings, nodes: NodeRegistry, bot: Bot) -> bool:
+async def process_one_job(
+    session: AsyncSession,
+    settings: Settings,
+    nodes: NodeRegistry,
+    bot: Bot,
+    plans: Optional[Mapping[str, PlanDefinition]] = None,
+) -> bool:
     job = await claim_next_job(session)
     if job is None:
         return False
 
     try:
         if job.type == JobType.provision_access.value:
-            await provision_access_for_job(session, settings, nodes, job)
+            await provision_access_for_job(session, settings, nodes, job, plans)
         elif job.type == JobType.send_access_message.value:
             await send_access_message_for_job(session, settings, bot, job)
         else:
@@ -188,6 +196,7 @@ async def provision_access_for_job(
     settings: Settings,
     nodes: NodeRegistry,
     job: Job,
+    plans: Optional[Mapping[str, PlanDefinition]] = None,
 ) -> ProvisioningResult:
     payload = _json_loads(job.payload)
     invoice_id = int(payload.get("invoice_id") or job.invoice_id)
@@ -215,6 +224,7 @@ async def provision_access_for_job(
     panel = nodes.get_client(node_code)
     client_id = str(payload["client_id"])
     xui_email = str(payload["xui_email"])
+    device_limit = max(1, int(payload.get("device_limit") or get_plan_device_limit(invoice.plan_code, plans)))
     expires_at = utc_now() + timedelta(days=invoice.duration_days)
 
     provisioned = await _ensure_xui_client(
@@ -227,6 +237,7 @@ async def provision_access_for_job(
         flow=node.flow,
         telegram_user_id=invoice.user.tg_id,
         comment=invoice.plan_title,
+        limit_ip=device_limit,
     )
     subscription = Subscription(
         user_id=invoice.user_id,

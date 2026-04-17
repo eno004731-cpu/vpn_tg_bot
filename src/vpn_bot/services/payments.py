@@ -104,6 +104,19 @@ def build_stars_reference(telegram_payment_charge_id: str) -> str:
     return f"XTR-{digest}"
 
 
+async def user_has_paid_plan(session: AsyncSession, user_id: int, plan_code: str) -> bool:
+    invoice_id = await session.scalar(
+        select(Invoice.id)
+        .where(
+            Invoice.user_id == user_id,
+            Invoice.plan_code == plan_code,
+            Invoice.paid_at.is_not(None),
+        )
+        .limit(1)
+    )
+    return invoice_id is not None
+
+
 async def create_stars_invoice_record(
     session: AsyncSession,
     user: User,

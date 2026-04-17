@@ -197,6 +197,7 @@ async def grant_plan(callback: CallbackQuery, callback_data: AdminGrantPlan, app
                 plan_title=plan.title,
                 duration_days=plan.duration_days,
                 traffic_limit_bytes=plan.traffic_limit_bytes,
+                device_limit=plan.device_limit,
             )
         except Exception as exc:  # noqa: BLE001
             logging.exception("Failed to grant access to user %s", callback_data.user_id)
@@ -297,7 +298,13 @@ async def reject_command(message: Message, command: CommandObject, app_context: 
 async def _approve_invoice(target: Union[Message, CallbackQuery], invoice_id: int, app_context: AppContext) -> None:
     async with app_context.session_factory() as session:
         try:
-            await schedule_invoice_provisioning(session, app_context.settings, app_context.nodes, invoice_id)
+            await schedule_invoice_provisioning(
+                session,
+                app_context.settings,
+                app_context.nodes,
+                invoice_id,
+                app_context.plans,
+            )
         except Exception as exc:  # noqa: BLE001
             logging.exception("Failed to schedule invoice %s provisioning", invoice_id)
             try:
