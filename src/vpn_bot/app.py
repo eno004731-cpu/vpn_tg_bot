@@ -12,8 +12,8 @@ from vpn_bot.config import load_plans, load_settings
 from vpn_bot.database import build_session_factory, init_db
 from vpn_bot.handlers import admin_router, user_router
 from vpn_bot.runtime import AppContext
+from vpn_bot.services.nodes import NodeRegistry
 from vpn_bot.services.subscriptions import sync_active_subscriptions
-from vpn_bot.services.xui import XUIClient
 
 
 async def run_bot() -> None:
@@ -22,13 +22,13 @@ async def run_bot() -> None:
     engine, session_factory = build_session_factory(settings.app.database_path)
     await init_db(engine)
 
-    panel = XUIClient(settings.xui)
+    nodes = NodeRegistry.from_settings(settings)
     context = AppContext(
         settings=settings,
         plans=plans,
         engine=engine,
         session_factory=session_factory,
-        panel=panel,
+        nodes=nodes,
     )
 
     bot = Bot(
@@ -46,7 +46,7 @@ async def run_bot() -> None:
         sync_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await sync_task
-        await panel.close()
+        await nodes.close()
         await bot.session.close()
         await engine.dispose()
 
@@ -55,7 +55,7 @@ async def background_sync(context: AppContext) -> None:
     while True:
         try:
             async with context.session_factory() as session:
-                await sync_active_subscriptions(session, context.panel, context.settings, context.plans)
+                await sync_active_subscriptions(session, context.nodes, context.settings, context.plans)
         except Exception:  # noqa: BLE001
             logging.exception("Traffic sync failed")
         await asyncio.sleep(context.settings.app.sync_interval_seconds)

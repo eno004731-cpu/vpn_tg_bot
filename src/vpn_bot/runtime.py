@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from vpn_bot.config import PlanDefinition, Settings
-from vpn_bot.services.xui import XUIClient
+from vpn_bot.services.nodes import NodeRegistry
 
 
 @dataclass
@@ -14,4 +14,4 @@ class AppContext:
     plans: dict[str, PlanDefinition]
     engine: AsyncEngine
     session_factory: async_sessionmaker[AsyncSession]
-    panel: XUIClient
+    nodes: NodeRegistry
