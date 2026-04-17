@@ -20,10 +20,12 @@ from vpn_bot.formatters import (
 from vpn_bot.keyboards import (
     AdminGrantPlan,
     AdminInvoiceAction,
+    AdminInvoicesPage,
     AdminSubscriptionAction,
     AdminUserAction,
     AdminUsersPage,
     admin_grant_plans_keyboard,
+    admin_invoices_page_keyboard,
     admin_user_keyboard,
     admin_user_search_back_keyboard,
     admin_users_keyboard,
@@ -42,6 +44,11 @@ from vpn_bot.utils import ensure_utc, format_bytes
 
 router = Router(name="admin")
 ADMIN_USERS_PAGE_SIZE = 10
+ADMIN_INVOICES_PAGE_SIZE = 10
+OPEN_INVOICE_STATUSES = (
+    InvoiceStatus.awaiting_transfer.value,
+    InvoiceStatus.pending_review.value,
+)
 
 
 def _is_admin(message_or_callback: Union[Message, CallbackQuery], admin_ids: tuple[int, ...]) -> bool:
@@ -56,6 +63,9 @@ async def admin_dashboard(message: Message, command: CommandObject, app_context:
     admin_args = (command.args or "").strip().lower()
     if admin_args in {"help", "commands", "команды"}:
         await message.answer(format_admin_help())
+        return
+    if admin_args in {"invoices", "invoice", "unpaid", "инвойсы", "счета"}:
+        await _send_open_invoices(message, app_context, page=0)
         return
     if admin_args.startswith(("users", "пользователи")):
         _, _, query = admin_args.partition(" ")
@@ -85,6 +95,13 @@ async def users_command(message: Message, command: CommandObject, app_context: A
     await _send_users_list(message, app_context, page=0, query=query)
 
 
+@router.message(Command("invoices"))
+async def invoices_command(message: Message, app_context: AppContext) -> None:
+    if not _is_admin(message, app_context.settings.app.admin_ids):
+        return
+    await _send_open_invoices(message, app_context, page=0)
+
+
 @router.message(Command("traffic_admin"))
 async def traffic_admin(message: Message, app_context: AppContext) -> None:
     if not _is_admin(message, app_context.settings.app.admin_ids):
@@ -96,6 +113,15 @@ async def traffic_admin(message: Message, app_context: AppContext) -> None:
         )
         await session.commit()
     await message.answer(format_admin_traffic_report(subscriptions))
+
+
+@router.callback_query(AdminInvoicesPage.filter())
+async def invoices_page(callback: CallbackQuery, callback_data: AdminInvoicesPage, app_context: AppContext) -> None:
+    if not _is_admin(callback, app_context.settings.app.admin_ids):
+        await callback.answer("Недостаточно прав.", show_alert=True)
+        return
+    await _send_open_invoices(callback, app_context, page=callback_data.page)
+    await callback.answer()
 
 
 @router.callback_query(AdminUsersPage.filter())
@@ -301,6 +327,66 @@ async def _reject_invoice(
         await target.message.edit_text(format_invoice_rejection(invoice, note))
     else:
         await target.answer(format_invoice_rejection(invoice, note))
+
+
+async def _send_open_invoices(
+    target: Union[Message, CallbackQuery],
+    app_context: AppContext,
+    *,
+    page: int = 0,
+) -> None:
+    page = max(page, 0)
+    async with app_context.session_factory() as session:
+        total = await session.scalar(
+            select(func.count()).select_from(Invoice).where(Invoice.status.in_(OPEN_INVOICE_STATUSES))
+        )
+        invoices = list(
+            await session.scalars(
+                select(Invoice)
+                .where(Invoice.status.in_(OPEN_INVOICE_STATUSES))
+                .options(selectinload(Invoice.user))
+                .order_by(Invoice.created_at.desc())
+                .offset(page * ADMIN_INVOICES_PAGE_SIZE)
+                .limit(ADMIN_INVOICES_PAGE_SIZE + 1)
+            )
+        )
+
+    has_next = len(invoices) > ADMIN_INVOICES_PAGE_SIZE
+    invoices = invoices[:ADMIN_INVOICES_PAGE_SIZE]
+    text = _format_open_invoices_page(invoices, page=page, total=total or 0)
+    keyboard = admin_invoices_page_keyboard(page, has_prev=page > 0, has_next=has_next)
+    await _send_or_edit(target, text, keyboard)
+
+
+def _format_open_invoices_page(invoices: list[Invoice], *, page: int, total: int) -> str:
+    lines = [
+        "<b>Неоплаченные инвойсы</b>",
+        f"Всего: <code>{total}</code>",
+        f"Страница: <code>{page + 1}</code>",
+    ]
+    if not invoices:
+        return "\n".join(lines + ["", "Открытых инвойсов нет."])
+
+    lines.extend(["", "<code>ID</code> | статус | сумма | пользователь | до"])
+    for invoice in invoices:
+        lines.append(_format_open_invoice_line(invoice))
+    lines.extend(["", "Подтвердить: <code>/approve ID</code>", "Отклонить: <code>/reject ID причина</code>"])
+    return "\n".join(lines)
+
+
+def _format_open_invoice_line(invoice: Invoice) -> str:
+    user = invoice.user
+    if user is None:
+        user_label = "-"
+    elif user.username:
+        user_label = f"@{user.username}"
+    else:
+        user_label = str(user.tg_id)
+    expires_at = ensure_utc(invoice.expires_at).astimezone().strftime("%Y-%m-%d %H:%M")
+    return (
+        f"<code>{invoice.id}</code> | {escape(invoice.status)} | "
+        f"{invoice.amount_rub} ₽ | {escape(user_label)} | {expires_at}"
+    )
 
 
 async def _send_users_list(

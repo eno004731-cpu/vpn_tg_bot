@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Optional
+
 from aiogram.filters.callback_data import CallbackData
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
 
@@ -26,6 +28,10 @@ class AdminInvoiceAction(CallbackData, prefix="admin_invoice"):
 
 
 class AdminUsersPage(CallbackData, prefix="aup"):
+    page: int
+
+
+class AdminInvoicesPage(CallbackData, prefix="aip"):
     page: int
 
 
@@ -162,6 +168,27 @@ def admin_users_keyboard(
     if navigation:
         rows.append(navigation)
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def admin_invoices_page_keyboard(page: int, has_prev: bool, has_next: bool) -> Optional[InlineKeyboardMarkup]:
+    navigation = []
+    if has_prev:
+        navigation.append(
+            InlineKeyboardButton(
+                text="<<",
+                callback_data=AdminInvoicesPage(page=page - 1).pack(),
+            )
+        )
+    if has_next:
+        navigation.append(
+            InlineKeyboardButton(
+                text=">>",
+                callback_data=AdminInvoicesPage(page=page + 1).pack(),
+            )
+        )
+    if not navigation:
+        return None
+    return InlineKeyboardMarkup(inline_keyboard=[navigation])
 
 
 def admin_user_keyboard(
