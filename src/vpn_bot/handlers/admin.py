@@ -14,6 +14,7 @@ from sqlalchemy.orm import selectinload
 from vpn_bot.formatters import (
     format_admin_dashboard,
     format_admin_help,
+    format_admin_nodes_report,
     format_admin_traffic_report,
     format_invoice_rejection,
 )
@@ -67,6 +68,9 @@ async def admin_dashboard(message: Message, command: CommandObject, app_context:
     if admin_args in {"invoices", "invoice", "unpaid", "инвойсы", "счета"}:
         await _send_open_invoices(message, app_context, page=0)
         return
+    if admin_args in {"nodes", "node", "ноды", "серверы"}:
+        await _send_nodes_report(message, app_context)
+        return
     if admin_args.startswith(("users", "пользователи")):
         _, _, query = admin_args.partition(" ")
         await _send_users_list(message, app_context, page=0, query=query.strip() or None)
@@ -102,6 +106,13 @@ async def invoices_command(message: Message, app_context: AppContext) -> None:
     await _send_open_invoices(message, app_context, page=0)
 
 
+@router.message(Command("nodes"))
+async def nodes_command(message: Message, app_context: AppContext) -> None:
+    if not _is_admin(message, app_context.settings.app.admin_ids):
+        return
+    await _send_nodes_report(message, app_context)
+
+
 @router.message(Command("traffic_admin"))
 async def traffic_admin(message: Message, app_context: AppContext) -> None:
     if not _is_admin(message, app_context.settings.app.admin_ids):
@@ -109,7 +120,7 @@ async def traffic_admin(message: Message, app_context: AppContext) -> None:
     async with app_context.session_factory() as session:
         await ensure_user(session, message.from_user, app_context.settings.app.admin_ids)
         subscriptions = await sync_active_subscriptions(
-            session, app_context.panel, app_context.settings, app_context.plans
+            session, app_context.nodes, app_context.settings, app_context.plans
         )
         await session.commit()
     await message.answer(format_admin_traffic_report(subscriptions))
@@ -168,7 +179,7 @@ async def grant_plan(callback: CallbackQuery, callback_data: AdminGrantPlan, app
             subscription = await provision_subscription_for_user(
                 session,
                 app_context.settings,
-                app_context.panel,
+                app_context.nodes,
                 user,
                 plan_code=plan.code,
                 plan_title=plan.title,
@@ -212,7 +223,7 @@ async def subscription_action(
             subscription = await revoke_subscription(
                 session,
                 app_context.settings,
-                app_context.panel,
+                app_context.nodes,
                 callback_data.subscription_id,
             )
         except Exception as exc:  # noqa: BLE001
@@ -274,7 +285,7 @@ async def reject_command(message: Message, command: CommandObject, app_context: 
 async def _approve_invoice(target: Union[Message, CallbackQuery], invoice_id: int, app_context: AppContext) -> None:
     async with app_context.session_factory() as session:
         try:
-            result = await activate_invoice(session, app_context.settings, app_context.panel, invoice_id)
+            result = await activate_invoice(session, app_context.settings, app_context.nodes, invoice_id)
         except Exception as exc:  # noqa: BLE001
             logging.exception("Failed to activate invoice %s", invoice_id)
             try:
@@ -356,6 +367,12 @@ async def _send_open_invoices(
     text = _format_open_invoices_page(invoices, page=page, total=total or 0)
     keyboard = admin_invoices_page_keyboard(page, has_prev=page > 0, has_next=has_next)
     await _send_or_edit(target, text, keyboard)
+
+
+async def _send_nodes_report(message: Message, app_context: AppContext) -> None:
+    async with app_context.session_factory() as session:
+        statuses = await app_context.nodes.collect_statuses(session)
+    await message.answer(format_admin_nodes_report(statuses))
 
 
 def _format_open_invoices_page(invoices: list[Invoice], *, page: int, total: int) -> str:

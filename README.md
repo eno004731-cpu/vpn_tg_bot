@@ -22,6 +22,7 @@ Telegram-бот для продажи VPN-подписок с интеграци
 - принимает оплату через Telegram Stars;
 - снижает скорость после дневного fair-use лимита;
 - умеет выдавать `VLESS + REALITY` ссылку, которая импортируется в Hiddify и v2RayTun;
+- умеет готовиться к нескольким VPN-нодам и выбирать менее загруженную ноду для новой подписки;
 - хранит секреты отдельно в `secrets/runtime.toml`, а Docker-образ их не забирает.
 
 ## Что внутри
@@ -137,6 +138,8 @@ timezone = "Europe/Moscow"
 
 - `/admin`
 - `/admin help`
+- `/admin nodes`
+- `/nodes`
 - `/admin users [username|id]`
 - `/users [username|id]`
 - `/traffic_admin`
@@ -155,6 +158,43 @@ timezone = "Europe/Moscow"
    - `node_code`, например `main`, чтобы подписки было проще переносить между серверами.
    Если бот запущен на том же Ubuntu-сервере, можно указать локальный URL панели:
    `base_url = "https://127.0.0.1:8443/secret-path/"` и `verify_tls = false`.
+
+Для одного сервера старый блок `[xui]` остаётся рабочим. Для нескольких серверов используйте `[[xui.nodes]]`:
+
+```toml
+[xui]
+default_node_code = "main"
+
+[[xui.nodes]]
+code = "main"
+name = "Netherlands main"
+enabled = true
+priority = 100
+base_url = "https://panel-main.example.com/secret-path"
+username = "admin"
+password = "super-secret"
+inbound_id = 1
+public_host = "vpn-main.example.com"
+public_port = 443
+verify_tls = true
+fingerprint = "chrome"
+flow = "xtls-rprx-vision"
+spider_x = "/"
+
+[[xui.nodes]]
+code = "nl-2"
+name = "Netherlands 2"
+enabled = true
+priority = 90
+base_url = "https://panel-nl2.example.com/secret-path"
+username = "admin"
+password = "super-secret"
+inbound_id = 1
+public_host = "vpn-nl2.example.com"
+public_port = 443
+```
+
+Новые подписки выдаются на включённую ноду с наименьшим числом активных подписок. Если `enabled = false`, новые пользователи на эту ноду не попадут, но старые подписки останутся привязанными к своему `node_code`.
 
 Подробный выбор стека и протокола описан в [docs/vpn-stack.md](docs/vpn-stack.md).
 Как готовить перенос на другие серверы: [docs/scaling.md](docs/scaling.md).

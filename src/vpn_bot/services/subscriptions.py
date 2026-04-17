@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Iterable, Mapping, Optional
@@ -12,6 +13,7 @@ from sqlalchemy.orm import selectinload
 
 from vpn_bot.config import PlanDefinition, Settings, TrafficPolicySettings
 from vpn_bot.models import Invoice, InvoiceStatus, Subscription, SubscriptionStatus, User
+from vpn_bot.services.nodes import NodeRegistry
 from vpn_bot.services.xui import TrafficSnapshot, XUIClient
 from vpn_bot.utils import ensure_utc, utc_now
 
@@ -32,7 +34,7 @@ def build_manual_xui_email(tg_id: int, plan_code: str) -> str:
 
 
 async def activate_invoice(
-    session: AsyncSession, settings: Settings, panel: XUIClient, invoice_id: int
+    session: AsyncSession, settings: Settings, nodes: NodeRegistry, invoice_id: int
 ) -> ActivationResult:
     invoice = await session.scalar(select(Invoice).options(selectinload(Invoice.user)).where(Invoice.id == invoice_id))
     if invoice is None:
@@ -49,16 +51,18 @@ async def activate_invoice(
         raise ValueError("Инвойс нельзя активировать в текущем статусе.")
 
     now = utc_now()
+    node = await nodes.select_node_for_new_subscription(session)
+    panel = nodes.get_client(node.node_code)
     client_id = panel.generate_client_id()
     xui_email = build_xui_email(invoice.user.tg_id, invoice.id, invoice.plan_code)
     expires_at = now + timedelta(days=invoice.duration_days)
     provisioned = await panel.add_client(
-        settings.xui.inbound_id,
+        node.inbound_id,
         client_id=client_id,
         email=xui_email,
         traffic_limit_bytes=invoice.traffic_limit_bytes,
         expires_at=expires_at,
-        flow=settings.xui.flow,
+        flow=node.flow,
         telegram_user_id=invoice.user.tg_id,
         comment=invoice.plan_title,
     )
@@ -68,7 +72,7 @@ async def activate_invoice(
         plan_code=invoice.plan_code,
         plan_title=invoice.plan_title,
         status=SubscriptionStatus.active.value,
-        node_code=settings.xui.node_code,
+        node_code=node.node_code,
         xui_client_id=provisioned.client_id,
         xui_email=provisioned.email,
         access_url=provisioned.access_url,
@@ -88,7 +92,7 @@ async def activate_invoice(
 async def provision_subscription_for_user(
     session: AsyncSession,
     settings: Settings,
-    panel: XUIClient,
+    nodes: NodeRegistry,
     user: User,
     *,
     plan_code: str,
@@ -98,16 +102,18 @@ async def provision_subscription_for_user(
     source_invoice_id: Optional[int] = None,
 ) -> Subscription:
     now = utc_now()
+    node = await nodes.select_node_for_new_subscription(session)
+    panel = nodes.get_client(node.node_code)
     client_id = panel.generate_client_id()
     xui_email = build_manual_xui_email(user.tg_id, plan_code)
     expires_at = now + timedelta(days=duration_days)
     provisioned = await panel.add_client(
-        settings.xui.inbound_id,
+        node.inbound_id,
         client_id=client_id,
         email=xui_email,
         traffic_limit_bytes=traffic_limit_bytes,
         expires_at=expires_at,
-        flow=settings.xui.flow,
+        flow=node.flow,
         telegram_user_id=user.tg_id,
         comment=plan_title,
     )
@@ -117,7 +123,7 @@ async def provision_subscription_for_user(
         plan_code=plan_code,
         plan_title=plan_title,
         status=SubscriptionStatus.active.value,
-        node_code=settings.xui.node_code,
+        node_code=node.node_code,
         xui_client_id=provisioned.client_id,
         xui_email=provisioned.email,
         access_url=provisioned.access_url,
@@ -134,7 +140,7 @@ async def provision_subscription_for_user(
 async def revoke_subscription(
     session: AsyncSession,
     settings: Settings,
-    panel: XUIClient,
+    nodes: NodeRegistry,
     subscription_id: int,
 ) -> Subscription:
     subscription = await session.scalar(
@@ -145,8 +151,11 @@ async def revoke_subscription(
     if subscription.status != SubscriptionStatus.active.value:
         raise ValueError("Подписка уже не активна.")
 
+    node_code = subscription.node_code or settings.xui.node_code
+    node = nodes.get_settings(node_code)
+    panel = nodes.get_client(node.node_code)
     await panel.set_client_enabled(
-        settings.xui.inbound_id,
+        node.inbound_id,
         client_id=subscription.xui_client_id,
         enabled=False,
     )
@@ -159,7 +168,7 @@ async def revoke_subscription(
 
 async def sync_active_subscriptions(
     session: AsyncSession,
-    panel: XUIClient,
+    nodes: NodeRegistry,
     settings: Optional[Settings] = None,
     plans: Optional[Mapping[str, PlanDefinition]] = None,
 ) -> list[Subscription]:
@@ -173,32 +182,55 @@ async def sync_active_subscriptions(
     if not subscriptions:
         return []
 
-    traffic_map = await panel.fetch_traffic_map()
     now = utc_now()
     changed = False
+    subscriptions_by_node: dict[str, list[Subscription]] = {}
 
     for subscription in subscriptions:
-        snapshot = traffic_map.get(subscription.xui_email)
-        if snapshot is not None:
-            subscription.upload_bytes = snapshot.upload_bytes
-            subscription.download_bytes = snapshot.download_bytes
-            subscription.traffic_used_bytes = snapshot.total_bytes
-            subscription.last_synced_at = now
-            changed = True
-            if settings is not None and await _apply_daily_traffic_policy(
-                subscription,
-                snapshot,
-                panel,
-                settings,
-                plan_daily_limit_bytes=_get_plan_daily_limit_bytes(subscription, plans),
-            ):
-                changed = True
         if (
             ensure_utc(subscription.ends_at) <= now
             or subscription.traffic_used_bytes >= subscription.traffic_limit_bytes
         ):
             if subscription.status != SubscriptionStatus.expired.value:
                 subscription.status = SubscriptionStatus.expired.value
+                changed = True
+            continue
+        node_code = subscription.node_code or (settings.xui.node_code if settings is not None else "main")
+        subscriptions_by_node.setdefault(node_code, []).append(subscription)
+
+    for node_code, node_subscriptions in subscriptions_by_node.items():
+        try:
+            node = nodes.get_settings(node_code)
+            panel = nodes.get_client(node.node_code)
+            traffic_map = await panel.fetch_traffic_map()
+        except Exception:  # noqa: BLE001
+            logging.exception("Traffic sync failed for node %s", node_code)
+            continue
+
+        for subscription in node_subscriptions:
+            snapshot = traffic_map.get(subscription.xui_email)
+            if snapshot is None:
+                continue
+            subscription.upload_bytes = snapshot.upload_bytes
+            subscription.download_bytes = snapshot.download_bytes
+            subscription.traffic_used_bytes = snapshot.total_bytes
+            subscription.last_synced_at = now
+            changed = True
+            if (
+                subscription.traffic_used_bytes >= subscription.traffic_limit_bytes
+                and subscription.status != SubscriptionStatus.expired.value
+            ):
+                subscription.status = SubscriptionStatus.expired.value
+                changed = True
+                continue
+            if settings is not None and await _apply_daily_traffic_policy(
+                subscription,
+                snapshot,
+                panel,
+                settings,
+                node_inbound_id=node.inbound_id,
+                plan_daily_limit_bytes=_get_plan_daily_limit_bytes(subscription, plans),
+            ):
                 changed = True
 
     if changed:
@@ -211,6 +243,8 @@ async def _apply_daily_traffic_policy(
     snapshot: TrafficSnapshot,
     panel: XUIClient,
     settings: Settings,
+    *,
+    node_inbound_id: Optional[int] = None,
     plan_daily_limit_bytes: Optional[int] = None,
 ) -> bool:
     policy = settings.traffic_policy
@@ -226,7 +260,7 @@ async def _apply_daily_traffic_policy(
         return changed
 
     await panel.update_client_speed_limit(
-        settings.xui.inbound_id,
+        node_inbound_id or settings.xui.inbound_id,
         client_id=subscription.xui_client_id,
         speed_limit_kbytes_per_second=target_speed_limit,
     )

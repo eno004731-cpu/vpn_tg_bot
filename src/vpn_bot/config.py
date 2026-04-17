@@ -65,6 +65,13 @@ class XUISettings:
     flow: str = "xtls-rprx-vision"
     spider_x: str = "/"
     node_code: str = "main"
+    name: Optional[str] = None
+    enabled: bool = True
+    priority: int = 100
+
+    @property
+    def display_name(self) -> str:
+        return self.name or self.node_code
 
 
 @dataclass
@@ -75,6 +82,11 @@ class Settings:
     xui: XUISettings
     secrets_file: Path
     plans_file: Path
+    xui_nodes: Tuple[XUISettings, ...] = ()
+
+    @property
+    def all_xui_nodes(self) -> Tuple[XUISettings, ...]:
+        return self.xui_nodes or (self.xui,)
 
 
 @dataclass(frozen=True)
@@ -146,6 +158,106 @@ def _env_bool(name: str) -> Optional[bool]:
     raise ConfigError(f"{name} должен быть true или false.")
 
 
+def _load_legacy_xui(raw_xui: dict[str, Any]) -> XUISettings:
+    xui_base_url = _coalesce(os.getenv("VPN_BOT_XUI_BASE_URL"), raw_xui.get("base_url"))
+    xui_username = _coalesce(os.getenv("VPN_BOT_XUI_USERNAME"), raw_xui.get("username"))
+    xui_password = _coalesce(os.getenv("VPN_BOT_XUI_PASSWORD"), raw_xui.get("password"))
+    public_host = _coalesce(os.getenv("VPN_BOT_PUBLIC_HOST"), raw_xui.get("public_host"))
+
+    required = {
+        "xui.base_url": xui_base_url,
+        "xui.username": xui_username,
+        "xui.password": xui_password,
+        "xui.public_host": public_host,
+    }
+    missing = [key for key, value in required.items() if value in (None, "")]
+    if missing:
+        raise ConfigError("Не заполнены обязательные секреты: " + ", ".join(sorted(missing)))
+
+    return XUISettings(
+        node_code=_coalesce(os.getenv("VPN_BOT_XUI_NODE_CODE"), raw_xui.get("node_code"), default="main"),
+        name=_coalesce(os.getenv("VPN_BOT_XUI_NODE_NAME"), raw_xui.get("name")),
+        enabled=bool(_coalesce(_env_bool("VPN_BOT_XUI_ENABLED"), raw_xui.get("enabled"), default=True)),
+        priority=int(_coalesce(_env_int("VPN_BOT_XUI_PRIORITY"), raw_xui.get("priority"), default=100)),
+        base_url=xui_base_url,
+        username=xui_username,
+        password=xui_password,
+        inbound_id=int(_coalesce(_env_int("VPN_BOT_XUI_INBOUND_ID"), raw_xui.get("inbound_id"), default=1)),
+        public_host=public_host,
+        public_port=int(_coalesce(_env_int("VPN_BOT_PUBLIC_PORT"), raw_xui.get("public_port"), default=443)),
+        verify_tls=bool(
+            _coalesce(
+                _env_bool("VPN_BOT_XUI_VERIFY_TLS"),
+                raw_xui.get("verify_tls"),
+                default=True,
+            )
+        ),
+        fingerprint=_coalesce(os.getenv("VPN_BOT_FINGERPRINT"), raw_xui.get("fingerprint"), default="chrome"),
+        flow=_coalesce(os.getenv("VPN_BOT_FLOW"), raw_xui.get("flow"), default="xtls-rprx-vision"),
+        spider_x=_coalesce(os.getenv("VPN_BOT_SPIDER_X"), raw_xui.get("spider_x"), default="/"),
+    )
+
+
+def _load_xui_node(raw_node: dict[str, Any], *, index: int) -> XUISettings:
+    node_code = _coalesce(raw_node.get("code"), raw_node.get("node_code"))
+    if not node_code:
+        raise ConfigError(f"Не заполнен xui.nodes[{index}].code")
+
+    required = {
+        f"xui.nodes[{node_code}].base_url": raw_node.get("base_url"),
+        f"xui.nodes[{node_code}].username": raw_node.get("username"),
+        f"xui.nodes[{node_code}].password": raw_node.get("password"),
+        f"xui.nodes[{node_code}].public_host": raw_node.get("public_host"),
+    }
+    missing = [key for key, value in required.items() if value in (None, "")]
+    if missing:
+        raise ConfigError("Не заполнены обязательные секреты: " + ", ".join(sorted(missing)))
+
+    return XUISettings(
+        node_code=str(node_code),
+        name=raw_node.get("name"),
+        enabled=bool(raw_node.get("enabled", True)),
+        priority=int(raw_node.get("priority", 100)),
+        base_url=raw_node["base_url"],
+        username=raw_node["username"],
+        password=raw_node["password"],
+        inbound_id=int(raw_node.get("inbound_id", 1)),
+        public_host=raw_node["public_host"],
+        public_port=int(raw_node.get("public_port", 443)),
+        verify_tls=bool(raw_node.get("verify_tls", True)),
+        fingerprint=raw_node.get("fingerprint", "chrome"),
+        flow=raw_node.get("flow", "xtls-rprx-vision"),
+        spider_x=raw_node.get("spider_x", "/"),
+    )
+
+
+def _load_xui_settings(raw_xui: dict[str, Any]) -> tuple[XUISettings, Tuple[XUISettings, ...]]:
+    raw_nodes = raw_xui.get("nodes") or []
+    if not raw_nodes:
+        node = _load_legacy_xui(raw_xui)
+        return node, (node,)
+
+    nodes = tuple(_load_xui_node(raw_node, index=index) for index, raw_node in enumerate(raw_nodes))
+    seen: set[str] = set()
+    duplicates: set[str] = set()
+    for node in nodes:
+        if node.node_code in seen:
+            duplicates.add(node.node_code)
+        seen.add(node.node_code)
+    if duplicates:
+        raise ConfigError("Дублируются xui.nodes code: " + ", ".join(sorted(duplicates)))
+
+    default_node_code = _coalesce(
+        os.getenv("VPN_BOT_XUI_DEFAULT_NODE_CODE"),
+        raw_xui.get("default_node_code"),
+        default=nodes[0].node_code,
+    )
+    for node in nodes:
+        if node.node_code == default_node_code:
+            return node, nodes
+    raise ConfigError(f"xui.default_node_code={default_node_code} не найден в xui.nodes")
+
+
 def load_settings() -> Settings:
     secrets_file = Path(os.getenv("VPN_BOT_SECRETS_FILE", DEFAULT_SECRETS_FILE))
     plans_file = Path(os.getenv("VPN_BOT_PLANS_FILE", DEFAULT_PLANS_FILE))
@@ -168,16 +280,9 @@ def load_settings() -> Settings:
     if not database_path.is_absolute():
         database_path = BASE_DIR / database_path
 
-    xui_base_url = _coalesce(os.getenv("VPN_BOT_XUI_BASE_URL"), xui.get("base_url"))
-    xui_username = _coalesce(os.getenv("VPN_BOT_XUI_USERNAME"), xui.get("username"))
-    xui_password = _coalesce(os.getenv("VPN_BOT_XUI_PASSWORD"), xui.get("password"))
-    public_host = _coalesce(os.getenv("VPN_BOT_PUBLIC_HOST"), xui.get("public_host"))
+    xui_settings, xui_nodes = _load_xui_settings(xui)
 
     required = {
-        "xui.base_url": xui_base_url,
-        "xui.username": xui_username,
-        "xui.password": xui_password,
-        "xui.public_host": public_host,
         "payment.bank_name": _coalesce(os.getenv("VPN_BOT_BANK_NAME"), payment.get("bank_name")),
         "payment.receiver_name": _coalesce(os.getenv("VPN_BOT_RECEIVER_NAME"), payment.get("receiver_name")),
         "payment.card_number": _coalesce(os.getenv("VPN_BOT_CARD_NUMBER"), payment.get("card_number")),
@@ -241,27 +346,10 @@ def load_settings() -> Settings:
             ),
             timezone=traffic_policy_timezone,
         ),
-        xui=XUISettings(
-            node_code=_coalesce(os.getenv("VPN_BOT_XUI_NODE_CODE"), xui.get("node_code"), default="main"),
-            base_url=xui_base_url,
-            username=xui_username,
-            password=xui_password,
-            inbound_id=int(_coalesce(_env_int("VPN_BOT_XUI_INBOUND_ID"), xui.get("inbound_id"), default=1)),
-            public_host=public_host,
-            public_port=int(_coalesce(_env_int("VPN_BOT_PUBLIC_PORT"), xui.get("public_port"), default=443)),
-            verify_tls=bool(
-                _coalesce(
-                    _env_bool("VPN_BOT_XUI_VERIFY_TLS"),
-                    xui.get("verify_tls"),
-                    default=True,
-                )
-            ),
-            fingerprint=_coalesce(os.getenv("VPN_BOT_FINGERPRINT"), xui.get("fingerprint"), default="chrome"),
-            flow=_coalesce(os.getenv("VPN_BOT_FLOW"), xui.get("flow"), default="xtls-rprx-vision"),
-            spider_x=_coalesce(os.getenv("VPN_BOT_SPIDER_X"), xui.get("spider_x"), default="/"),
-        ),
+        xui=xui_settings,
         secrets_file=secrets_file,
         plans_file=plans_file,
+        xui_nodes=xui_nodes,
     )
 
 

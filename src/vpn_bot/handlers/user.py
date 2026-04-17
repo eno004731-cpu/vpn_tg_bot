@@ -189,7 +189,7 @@ async def stars_successful_payment(message: Message, app_context: AppContext) ->
                     payment.telegram_payment_charge_id,
                     payment.total_amount,
                 )
-            result = await activate_invoice(session, app_context.settings, app_context.panel, invoice.id)
+            result = await activate_invoice(session, app_context.settings, app_context.nodes, invoice.id)
         except Exception as exc:  # noqa: BLE001
             logging.exception("Failed to activate Stars payment %s", reference_code)
             refunded = await _refund_failed_stars_payment(message, payment.telegram_payment_charge_id)
