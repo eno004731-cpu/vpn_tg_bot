@@ -1,0 +1,127 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: postgres-nightly-backup
+  namespace: vpn-prod
+spec:
+  schedule: "30 3 * * *"
+  timeZone: Europe/Moscow
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: postgres-backup
+              image: postgres:16-alpine
+              envFrom:
+                - secretRef:
+                    name: postgres-secret
+              env:
+                - name: BACKUP_ROOT
+                  value: /backup/postgres
+                - name: RETENTION_DAILY
+                  value: "14"
+                - name: RETENTION_WEEKLY
+                  value: "8"
+              command:
+                - /bin/sh
+                - -ec
+                - |
+                  timestamp="$(date +%Y%m%d-%H%M%S)"
+                  mkdir -p "$BACKUP_ROOT/daily" "$BACKUP_ROOT/weekly" /backup/logs
+                  log_file="/backup/logs/postgres-backup-${timestamp}.log"
+                  exec >>"$log_file" 2>&1
+
+                  echo "[$(date -Is)] Starting Postgres backup"
+                  if ! pg_isready -h postgres -U "$POSTGRES_USER" -d "$POSTGRES_DB" >/dev/null 2>&1; then
+                    echo "Postgres is not reachable, skipping backup"
+                    exit 0
+                  fi
+
+                  export PGPASSWORD="$POSTGRES_PASSWORD"
+                  dump_file="$BACKUP_ROOT/daily/vpn-bot-${timestamp}.dump"
+                  pg_dump -Fc -h postgres -U "$POSTGRES_USER" "$POSTGRES_DB" -f "$dump_file"
+                  echo "Created dump: $dump_file"
+
+                  if [ "$(date +%u)" = "1" ]; then
+                    weekly_file="$BACKUP_ROOT/weekly/vpn-bot-week-$(date +%G-W%V).dump"
+                    cp "$dump_file" "$weekly_file"
+                    echo "Created weekly dump: $weekly_file"
+                  fi
+
+                  find "$BACKUP_ROOT/daily" -maxdepth 1 -type f | sort -r | tail -n +15 | xargs -r rm -f
+                  find "$BACKUP_ROOT/weekly" -maxdepth 1 -type f | sort -r | tail -n +9 | xargs -r rm -f
+                  echo "[$(date -Is)] Postgres backup finished"
+              volumeMounts:
+                - name: backup-root
+                  mountPath: /backup
+          volumes:
+            - name: backup-root
+              hostPath:
+                path: /srv/backups/vpn-bot
+                type: DirectoryOrCreate
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: postgres-weekly-restore-check
+  namespace: vpn-prod
+spec:
+  schedule: "15 4 * * 1"
+  timeZone: Europe/Moscow
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: postgres-restore-check
+              image: postgres:16-alpine
+              envFrom:
+                - secretRef:
+                    name: postgres-secret
+              env:
+                - name: BACKUP_ROOT
+                  value: /backup/postgres
+              command:
+                - /bin/sh
+                - -ec
+                - |
+                  latest_dump="$(find "$BACKUP_ROOT/daily" -maxdepth 1 -type f -name '*.dump' | sort -r | head -n 1 || true)"
+                  mkdir -p /backup/logs
+                  log_file="/backup/logs/postgres-restore-check-$(date +%Y%m%d-%H%M%S).log"
+                  exec >>"$log_file" 2>&1
+
+                  if [ -z "$latest_dump" ]; then
+                    echo "No Postgres dump found in $BACKUP_ROOT/daily"
+                    exit 1
+                  fi
+                  if ! pg_isready -h postgres -U "$POSTGRES_USER" -d "$POSTGRES_DB" >/dev/null 2>&1; then
+                    echo "Postgres is not reachable, skipping restore check"
+                    exit 0
+                  fi
+
+                  export PGPASSWORD="$POSTGRES_PASSWORD"
+                  temp_db="vpn_bot_restore_check"
+                  psql -h postgres -U "$POSTGRES_USER" -d postgres -c "DROP DATABASE IF EXISTS ${temp_db};"
+                  psql -h postgres -U "$POSTGRES_USER" -d postgres -c "CREATE DATABASE ${temp_db};"
+                  pg_restore -h postgres -U "$POSTGRES_USER" -d "$temp_db" "$latest_dump"
+                  psql -h postgres -U "$POSTGRES_USER" -d "$temp_db" -c "SELECT 1;"
+                  psql -h postgres -U "$POSTGRES_USER" -d "$temp_db" -c "SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public';"
+                  psql -h postgres -U "$POSTGRES_USER" -d postgres -c "DROP DATABASE IF EXISTS ${temp_db};"
+                  echo "Restore check passed for $latest_dump"
+              volumeMounts:
+                - name: backup-root
+                  mountPath: /backup
+          volumes:
+            - name: backup-root
+              hostPath:
+                path: /srv/backups/vpn-bot
+                type: DirectoryOrCreate

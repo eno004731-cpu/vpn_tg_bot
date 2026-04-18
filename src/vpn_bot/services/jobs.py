@@ -5,15 +5,22 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from html import escape
+from time import perf_counter
 from typing import Any, Optional
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from vpn_bot.config import Settings
+from vpn_bot.metrics import (
+    observe_job_attempt,
+    observe_job_snapshot,
+    observe_provision_attempt,
+    observe_telegram_send_failure,
+)
 from vpn_bot.models import Invoice, InvoiceStatus, Job, JobStatus, JobType, Subscription, SubscriptionStatus
 from vpn_bot.services.crypto import decrypt_value, encrypt_value
 from vpn_bot.services.nodes import NodeRegistry
@@ -157,7 +164,21 @@ async def claim_next_job(session: AsyncSession) -> Optional[Job]:
     job.attempts += 1
     await session.commit()
     await session.refresh(job)
+    observe_job_attempt(job.type)
     return job
+
+
+async def refresh_job_metrics(session: AsyncSession) -> None:
+    counts = {status: 0 for status in (JobStatus.pending.value, JobStatus.running.value, JobStatus.failed.value)}
+    result = await session.execute(select(Job.status, func.count(Job.id)).group_by(Job.status))
+    for status, count in result.all():
+        if status in counts:
+            counts[status] = int(count)
+    observe_job_snapshot(
+        pending=counts[JobStatus.pending.value],
+        running=counts[JobStatus.running.value],
+        failed=counts[JobStatus.failed.value],
+    )
 
 
 async def process_one_job(session: AsyncSession, settings: Settings, nodes: NodeRegistry, bot: Bot) -> bool:
@@ -165,15 +186,21 @@ async def process_one_job(session: AsyncSession, settings: Settings, nodes: Node
     if job is None:
         return False
 
+    provision_started_at = perf_counter() if job.type == JobType.provision_access.value else None
     try:
         if job.type == JobType.provision_access.value:
             await provision_access_for_job(session, settings, nodes, job)
+            observe_provision_attempt(perf_counter() - provision_started_at, success=True)
         elif job.type == JobType.send_access_message.value:
             await send_access_message_for_job(session, settings, bot, job)
         else:
             raise ValueError(f"Неизвестный тип job: {job.type}")
     except Exception as exc:  # noqa: BLE001
         logging.exception("Failed to process job %s", job.id)
+        if job.type == JobType.provision_access.value and provision_started_at is not None:
+            observe_provision_attempt(perf_counter() - provision_started_at, success=False)
+        if job.type == JobType.send_access_message.value:
+            observe_telegram_send_failure()
         await mark_job_failed_or_retry(session, settings, bot, job, exc)
         return True
 

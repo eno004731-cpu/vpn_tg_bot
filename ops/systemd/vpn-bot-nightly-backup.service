@@ -1,0 +1,13 @@
+[Unit]
+Description=Nightly VPN bot host backup
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/default/vpn-bot-backup
+ExecStart=/opt/vpn-bot/scripts/nightly_backup.sh
+ExecStartPost=/opt/vpn-bot/scripts/restore_check.sh
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7

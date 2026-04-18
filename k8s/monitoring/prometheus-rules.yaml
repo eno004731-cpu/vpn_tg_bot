@@ -1,0 +1,82 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: vpn-bot
+  namespace: vpn-prod
+  labels:
+    app.kubernetes.io/part-of: vpn-bot
+spec:
+  groups:
+    - name: vpn-bot.rules
+      rules:
+        - alert: VpnBotReadyzDown
+          expr: kube_deployment_status_replicas_available{namespace="vpn-prod",deployment="vpn-bot-web"} < 1
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: vpn-bot-web is unavailable
+            description: No ready replicas are available for vpn-bot-web in vpn-prod.
+        - alert: VpnBotWebhookErrorsHigh
+          expr: increase(vpn_bot_webhook_requests_total{result="error"}[10m]) > 0
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: Webhook handler is returning internal errors
+            description: vpn-bot-web reported webhook processing errors during the last 10 minutes.
+        - alert: VpnBotProvisionFailuresPresent
+          expr: increase(vpn_bot_provision_failures_total[15m]) > 0
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: Provisioning failures detected
+            description: The worker reported failed provisioning attempts during the last 15 minutes.
+        - alert: VpnBotJobsStuck
+          expr: max_over_time(vpn_bot_jobs_pending[15m]) > 0 and increase(vpn_bot_job_attempts_total[15m]) == 0
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: Job queue appears stuck
+            description: Pending jobs are present, but the worker has not claimed any jobs for 15 minutes.
+        - alert: VpnBotWorkerDown
+          expr: kube_deployment_status_replicas_available{namespace="vpn-prod",deployment="vpn-bot-worker"} < 1
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: vpn-bot-worker is unavailable
+            description: No ready replicas are available for vpn-bot-worker in vpn-prod.
+        - alert: PostgresDown
+          expr: kube_statefulset_status_replicas_ready{namespace="vpn-prod",statefulset="postgres"} < 1
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: Postgres is unavailable
+            description: The postgres StatefulSet has no ready replicas in vpn-prod.
+        - alert: PodCrashLooping
+          expr: max(kube_pod_container_status_waiting_reason{namespace="vpn-prod",reason="CrashLoopBackOff"}) by (pod, container) > 0
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: Pod is crash looping
+            description: Pod {{ $labels.pod }} / container {{ $labels.container }} is in CrashLoopBackOff.
+        - alert: HighCpuOrMemoryUsage
+          expr: |
+            max by (pod) (rate(container_cpu_usage_seconds_total{namespace="vpn-prod",container!="",container!="POD",image!=""}[5m])) > 0.8
+            or
+            max by (pod) (
+              container_memory_working_set_bytes{namespace="vpn-prod",container!="",container!="POD",image!=""}
+              /
+              container_spec_memory_limit_bytes{namespace="vpn-prod",container!="",container!="POD",image!=""}
+            ) > 0.9
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: Pod is close to CPU or memory limits
+            description: Pod {{ $labels.pod }} is consuming high CPU or memory in vpn-prod.

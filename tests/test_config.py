@@ -73,6 +73,8 @@ public_port = 443
 
     assert settings.xui.node_code == "main"
     assert settings.app.database_url == "postgresql://vpn:secret@postgres:5432/vpn_bot"
+    assert settings.app.worker_metrics_host == "0.0.0.0"
+    assert settings.app.worker_metrics_port == 9091
     assert settings.xui.public_host == "vpn.example.com"
     assert [node.node_code for node in settings.all_xui_nodes] == ["main"]
 

@@ -75,6 +75,7 @@ vpn-bot worker
 ```
 
 `web` принимает Telegram webhook и отвечает на `/healthz` и `/readyz`. `worker` выдаёт доступ в `3x-ui`, ретраит ошибки, синкает трафик и отправляет пользователю ссылку.
+`web` также публикует `/metrics`, а `worker` поднимает отдельный metrics listener на `worker_metrics_host:worker_metrics_port`.
 
 ## Как устроена оплата без платёжной системы
 
@@ -137,7 +138,8 @@ timezone = "Europe/Moscow"
 - `secrets/` игнорируется git;
 - `secrets/` исключён из Docker-контекста через `.dockerignore`;
 - в прод контейнер монтирует секреты как read-only volume.
-- в Kubernetes Vault Agent должен рендерить тот же файл в `/vault/secrets/runtime.toml`;
+- в первом k8s cutover тот же файл монтируется в pod как Kubernetes Secret `vpn-bot-runtime`;
+- Vault вынесен в `k8s/optional/` и подключается позже отдельным этапом;
 - если задан `field_encryption_key`, новые `access_url`, `xui_client_id`, `xui_email` пишутся в БД как `enc:v1:...`.
 
 Для Postgres можно указать URL через env или TOML:
@@ -237,23 +239,32 @@ public_port = 443
 - `vpn-bot-web` — `Deployment` на 2 реплики, принимает Telegram webhook;
 - `vpn-bot-worker` — `Deployment` на 1 реплику, обрабатывает outbox/jobs;
 - `postgres` — `StatefulSet`;
-- `vault` — `StatefulSet`;
+- `backups.yaml` — `CronJob` для nightly backup Postgres и weekly restore-check;
+- `optional/vault.yaml` — Vault, если он понадобится позже;
+- `optional/vault-backups.yaml` — nightly Vault backup для отдельного vault rollout;
 - `vpn-bot-web` — `Service`;
 - `Ingress` для `panel.swift-log.ru`;
+- `monitoring/` — values и custom resources для `kube-prometheus-stack`;
 - `xui-template.yaml` — подготовка 3x-ui на тестовых портах, не включена в `kustomization.yaml`.
 
 Базовая проверка:
 
 ```bash
-kubectl apply -k k8s
-kubectl rollout status deployment/vpn-bot-web -n vpn-prod
-kubectl rollout status deployment/vpn-bot-worker -n vpn-prod
-kubectl rollout status statefulset/postgres -n vpn-prod
+chmod +x ops/k3s/build_and_import_image.sh ops/k3s/create_runtime_secret.sh
+sudo APP_DIR=/opt/vpn-bot ./ops/k3s/build_and_import_image.sh
+sudo RUNTIME_TOML_PATH=/opt/vpn-bot/secrets/runtime.toml ./ops/k3s/create_runtime_secret.sh
+sudo k3s kubectl apply -k k8s
+sudo k3s kubectl rollout status deployment/vpn-bot-web -n vpn-prod
+sudo k3s kubectl rollout status deployment/vpn-bot-worker -n vpn-prod
+sudo k3s kubectl rollout status statefulset/postgres -n vpn-prod
 curl https://panel.swift-log.ru/healthz
 curl https://panel.swift-log.ru/readyz
+curl https://panel.swift-log.ru/metrics
 ```
 
 Текущий `x-ui`/VPN на systemd эти манифесты не трогают. Переключать Telegram webhook можно только после миграции базы и проверки `web/worker`. Подробный порядок: [docs/kubernetes-rollout.md](docs/kubernetes-rollout.md).
+
+Мониторинг и nightly backup-операции описаны в [docs/operations.md](docs/operations.md).
 
 ## Перед публикацией
 
