@@ -304,18 +304,43 @@ CD запускается только при `push` в `main` или вручн
 vpn-bot,prod
 ```
 
-И systemd-сервис:
+И systemd-сервисы:
 
 ```bash
-sudo systemctl status vpn-bot --no-pager
+sudo systemctl status vpn-bot-web --no-pager
+sudo systemctl status vpn-bot-worker --no-pager
 ```
 
-Чтобы runner мог перезапускать только сервис бота без пароля:
+CD по умолчанию работает в webhook-режиме:
+
+- ставит unit-файлы из `ops/systemd/vpn-bot-web.service` и `ops/systemd/vpn-bot-worker.service`;
+- делает `systemctl daemon-reload`;
+- отключает polling fallback `vpn-bot`;
+- включает и перезапускает `vpn-bot-web` и `vpn-bot-worker`.
+
+Чтобы runner мог делать это без пароля:
 
 ```bash
 sudo visudo -f /etc/sudoers.d/github-runner-vpn-bot
 ```
 
 ```text
-github-runner ALL=(root) NOPASSWD: /usr/bin/systemctl restart vpn-bot, /usr/bin/systemctl status vpn-bot --no-pager, /bin/systemctl restart vpn-bot, /bin/systemctl status vpn-bot --no-pager
+Cmnd_Alias VPN_BOT_DEPLOY = \
+  /usr/bin/install -m 0644 /opt/vpn-bot/ops/systemd/vpn-bot-web.service /etc/systemd/system/vpn-bot-web.service, \
+  /usr/bin/install -m 0644 /opt/vpn-bot/ops/systemd/vpn-bot-worker.service /etc/systemd/system/vpn-bot-worker.service, \
+  /usr/bin/systemctl daemon-reload, \
+  /usr/bin/systemctl disable --now vpn-bot, \
+  /usr/bin/systemctl enable vpn-bot-web vpn-bot-worker, \
+  /usr/bin/systemctl reset-failed vpn-bot-web, \
+  /usr/bin/systemctl reset-failed vpn-bot-worker, \
+  /usr/bin/systemctl restart vpn-bot-web, \
+  /usr/bin/systemctl restart vpn-bot-worker, \
+  /usr/bin/systemctl is-active --quiet vpn-bot-web, \
+  /usr/bin/systemctl is-active --quiet vpn-bot-worker, \
+  /usr/bin/systemctl status vpn-bot-web --no-pager, \
+  /usr/bin/systemctl status vpn-bot-worker --no-pager
+
+github-runner ALL=(root) NOPASSWD: VPN_BOT_DEPLOY
 ```
+
+Если нужен временный rollback в polling, в `.github/workflows/deploy.yml` можно поменять `DEPLOY_MODE` на `polling`; тогда runner должен также иметь права на `enable/restart/status` для `vpn-bot`.

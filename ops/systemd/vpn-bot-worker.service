@@ -1,0 +1,16 @@
+[Unit]
+Description=VPN Telegram Bot Worker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/vpn-bot
+Environment=VPN_BOT_HOME=/opt/vpn-bot
+Environment=VPN_BOT_SECRETS_FILE=/opt/vpn-bot/secrets/runtime.toml
+ExecStart=/opt/vpn-bot/.venv/bin/python -m vpn_bot worker
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

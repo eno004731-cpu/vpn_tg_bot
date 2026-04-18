@@ -22,6 +22,7 @@ jobs:
       APP_DIR: /opt/vpn-bot
       POLLING_SERVICE_NAME: vpn-bot
       WEBHOOK_SERVICE_NAMES: vpn-bot-web vpn-bot-worker
+      DEPLOY_MODE: webhook
 
     steps:
       - name: Checkout for checks
@@ -81,32 +82,52 @@ jobs:
           .venv/bin/python -m pip install -e .
           .venv/bin/python -m vpn_bot init-db
 
+      - name: Install systemd service units
+        run: |
+          set -euo pipefail
+          cd "$APP_DIR"
+
+          if [ "$DEPLOY_MODE" = "webhook" ]; then
+            for service in $WEBHOOK_SERVICE_NAMES; do
+              unit_path="ops/systemd/${service}.service"
+              if [ ! -f "$unit_path" ]; then
+                echo "::error::Missing systemd unit template: $unit_path"
+                exit 1
+              fi
+              sudo -n install -m 0644 "$APP_DIR/$unit_path" "/etc/systemd/system/${service}.service"
+            done
+          fi
+
+          sudo -n systemctl daemon-reload
+
       - name: Restart bot services
         run: |
           set -euo pipefail
 
-          found_services=""
-          missing_services=""
-          for service in $WEBHOOK_SERVICE_NAMES; do
-            if systemctl cat "$service" >/dev/null 2>&1; then
-              found_services="$found_services $service"
-            else
-              missing_services="$missing_services $service"
+          if [ "$DEPLOY_MODE" = "webhook" ]; then
+            if systemctl cat "$POLLING_SERVICE_NAME" >/dev/null 2>&1; then
+              sudo -n systemctl disable --now "$POLLING_SERVICE_NAME" || true
             fi
-          done
 
-          if [ -n "${found_services## }" ] && [ -n "${missing_services## }" ]; then
-            echo "::error::Webhook mode is partially installed. Found:${found_services} Missing:${missing_services}"
-            exit 1
-          fi
-
-          if [ -n "${found_services## }" ]; then
+            sudo -n systemctl enable $WEBHOOK_SERVICE_NAMES
             for service in $WEBHOOK_SERVICE_NAMES; do
+              sudo -n systemctl reset-failed "$service" || true
               sudo -n systemctl restart "$service"
+              sleep 2
+              sudo -n systemctl is-active --quiet "$service"
               sudo -n systemctl status "$service" --no-pager
             done
           else
+            for service in $WEBHOOK_SERVICE_NAMES; do
+              if systemctl cat "$service" >/dev/null 2>&1; then
+                sudo -n systemctl disable --now "$service" || true
+              fi
+            done
+
+            sudo -n systemctl enable "$POLLING_SERVICE_NAME"
+            sudo -n systemctl reset-failed "$POLLING_SERVICE_NAME" || true
             sudo -n systemctl restart "$POLLING_SERVICE_NAME"
+            sudo -n systemctl is-active --quiet "$POLLING_SERVICE_NAME"
             sudo -n systemctl status "$POLLING_SERVICE_NAME" --no-pager
           fi
 
@@ -117,6 +138,7 @@ jobs:
             echo ""
             echo "- Commit: \`$GITHUB_SHA\`"
             echo "- App dir: \`$APP_DIR\`"
+            echo "- Deploy mode: \`$DEPLOY_MODE\`"
             echo "- Webhook services: \`$WEBHOOK_SERVICE_NAMES\`"
             echo "- Polling fallback service: \`$POLLING_SERVICE_NAME\`"
           } >> "$GITHUB_STEP_SUMMARY"
