@@ -7,12 +7,16 @@ from vpn_bot.config import PaymentSettings, PlanDefinition
 from vpn_bot.database import build_session_factory, init_db
 from vpn_bot.models import Invoice, InvoiceStatus, User
 from vpn_bot.services.payments import (
+    OneTimePlanAlreadyPurchased,
     build_stars_payload,
     build_stars_reference,
     create_invoice,
     expire_stale_invoices,
     parse_stars_payload,
+    reject_invoice,
+    reserve_one_time_plan_purchase,
     reserve_unique_amount,
+    user_has_paid_plan,
 )
 from vpn_bot.services.subscriptions import get_open_invoices_for_user
 from vpn_bot.utils import decimal_to_kopecks, utc_now
@@ -137,7 +141,7 @@ async def test_get_open_invoices_for_user_hides_expired_awaiting_transfer(tmp_pa
     assert [invoice.reference_code for invoice in invoices] == ["VPN-000002"]
 
 
-async def test_expire_stale_invoices_closes_waiting_and_review_invoices(tmp_path) -> None:
+async def test_expire_stale_invoices_closes_only_waiting_invoices(tmp_path) -> None:
     engine, session_factory = build_session_factory(tmp_path / "bot.sqlite3")
     await init_db(engine)
 
@@ -193,9 +197,134 @@ async def test_expire_stale_invoices_closes_waiting_and_review_invoices(tmp_path
 
     await engine.dispose()
 
-    assert expired_count == 2
+    assert expired_count == 1
     assert statuses == {
         "VPN-000001": InvoiceStatus.expired.value,
-        "VPN-000002": InvoiceStatus.expired.value,
+        "VPN-000002": InvoiceStatus.pending_review.value,
         "VPN-000003": InvoiceStatus.awaiting_transfer.value,
     }
+
+
+async def test_reject_invoice_refuses_paid_invoice(tmp_path) -> None:
+    engine, session_factory = build_session_factory(tmp_path / "bot.sqlite3")
+    await init_db(engine)
+
+    async with session_factory() as session:
+        user = User(tg_id=123, username="user", full_name="User")
+        session.add(user)
+        await session.flush()
+        invoice = Invoice(
+            user_id=user.id,
+            plan_code="starter",
+            plan_title="Starter",
+            duration_days=30,
+            traffic_limit_bytes=10,
+            amount_rub=Decimal("100.00"),
+            amount_kopecks=10000,
+            reference_code="VPN-000001",
+            status=InvoiceStatus.paid.value,
+            expires_at=utc_now() - timedelta(minutes=1),
+            paid_at=utc_now(),
+        )
+        session.add(invoice)
+        await session.flush()
+
+        try:
+            reject_invoice(invoice)
+        except ValueError as exc:
+            message = str(exc)
+        else:
+            message = ""
+
+    await engine.dispose()
+
+    assert message == "Инвойс нельзя отклонить в текущем статусе."
+    assert invoice.status == InvoiceStatus.paid.value
+
+
+async def test_one_time_plan_purchase_reservation_blocks_second_invoice(tmp_path) -> None:
+    engine, session_factory = build_session_factory(tmp_path / "bot.sqlite3")
+    await init_db(engine)
+    plan = PlanDefinition(
+        code="trial",
+        title="Trial",
+        price_rub=Decimal("100.00"),
+        duration_days=3,
+        traffic_limit_gb=30,
+        one_time_per_user=True,
+    )
+
+    async with session_factory() as session:
+        user = User(tg_id=123, username="user", full_name="User")
+        session.add(user)
+        await session.flush()
+        first = Invoice(
+            user_id=user.id,
+            plan_code=plan.code,
+            plan_title=plan.title,
+            duration_days=plan.duration_days,
+            traffic_limit_bytes=plan.traffic_limit_bytes,
+            amount_rub=Decimal("100.00"),
+            amount_kopecks=10000,
+            reference_code="VPN-000001",
+            status=InvoiceStatus.pending_review.value,
+            expires_at=utc_now() + timedelta(hours=1),
+        )
+        second = Invoice(
+            user_id=user.id,
+            plan_code=plan.code,
+            plan_title=plan.title,
+            duration_days=plan.duration_days,
+            traffic_limit_bytes=plan.traffic_limit_bytes,
+            amount_rub=Decimal("100.01"),
+            amount_kopecks=10001,
+            reference_code="VPN-000002",
+            status=InvoiceStatus.pending_review.value,
+            expires_at=utc_now() + timedelta(hours=1),
+        )
+        session.add_all([first, second])
+        await session.flush()
+
+        await reserve_one_time_plan_purchase(session, first, {plan.code: plan})
+        try:
+            await reserve_one_time_plan_purchase(session, second, {plan.code: plan})
+        except OneTimePlanAlreadyPurchased as exc:
+            message = str(exc)
+        else:
+            message = ""
+
+    await engine.dispose()
+
+    assert message == "Этот тариф можно купить только один раз."
+
+
+async def test_user_has_paid_plan_ignores_rejected_paid_duplicate(tmp_path) -> None:
+    engine, session_factory = build_session_factory(tmp_path / "bot.sqlite3")
+    await init_db(engine)
+
+    async with session_factory() as session:
+        user = User(tg_id=123, username="user", full_name="User")
+        session.add(user)
+        await session.flush()
+        session.add(
+            Invoice(
+                user_id=user.id,
+                plan_code="trial",
+                plan_title="Trial",
+                duration_days=3,
+                traffic_limit_bytes=10,
+                amount_rub=Decimal("1.00"),
+                amount_kopecks=100,
+                reference_code="XTR-duplicate",
+                status=InvoiceStatus.rejected.value,
+                expires_at=utc_now() + timedelta(minutes=15),
+                paid_at=utc_now(),
+            )
+        )
+        await session.commit()
+
+        result = await user_has_paid_plan(session, user.id, "trial")
+
+    await engine.dispose()
+
+    assert result is False

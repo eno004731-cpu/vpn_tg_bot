@@ -25,6 +25,7 @@ from vpn_bot.models import Invoice, InvoiceStatus
 from vpn_bot.runtime import AppContext
 from vpn_bot.services.jobs import schedule_invoice_provisioning
 from vpn_bot.services.payments import (
+    OneTimePlanAlreadyPurchased,
     build_stars_payload,
     build_stars_reference,
     create_invoice,
@@ -34,6 +35,7 @@ from vpn_bot.services.payments import (
     format_invoice_for_user,
     mark_invoice_pending_review,
     parse_stars_payload,
+    reserve_one_time_plan_purchase,
     user_has_paid_plan,
 )
 from vpn_bot.services.subscriptions import (
@@ -104,6 +106,10 @@ async def transfer_payment_selected(
 
     async with app_context.session_factory() as session:
         user = await ensure_user(session, callback.from_user, app_context.settings.app.admin_ids)
+        if plan.one_time_per_user and await user_has_paid_plan(session, user.id, plan.code):
+            await session.commit()
+            await callback.answer(_one_time_plan_error(), show_alert=True)
+            return
         invoice = await create_invoice(session, user, plan, app_context.settings.payment)
 
     await callback.message.answer(
@@ -213,19 +219,6 @@ async def stars_successful_payment(message: Message, app_context: AppContext) ->
     async with app_context.session_factory() as session:
         user = await ensure_user(session, message.from_user, app_context.settings.app.admin_ids)
         invoice = await session.scalar(select(Invoice).where(Invoice.reference_code == reference_code))
-        if invoice is None and plan.one_time_per_user and await user_has_paid_plan(session, user.id, plan.code):
-            await session.commit()
-            await _notify_admins_about_stars_schedule_error(
-                message,
-                app_context,
-                reference_code,
-                RuntimeError(f"Повторная покупка одноразового тарифа {plan.code}"),
-            )
-            await message.answer(
-                "Оплата Stars получена, но этот тариф уже был куплен раньше. "
-                "Администратор уже видит ситуацию и поможет вручную."
-            )
-            return
         if invoice is None:
             invoice = await create_stars_invoice_record(
                 session,
@@ -234,6 +227,30 @@ async def stars_successful_payment(message: Message, app_context: AppContext) ->
                 payment.telegram_payment_charge_id,
                 payment.total_amount,
             )
+            try:
+                await reserve_one_time_plan_purchase(session, invoice, app_context.plans)
+            except OneTimePlanAlreadyPurchased:
+                invoice.status = InvoiceStatus.rejected.value
+                invoice.paid_at = utc_now()
+                invoice.admin_note = "Повторная покупка одноразового тарифа через Telegram Stars."
+                await session.commit()
+                await _notify_admins_about_stars_schedule_error(
+                    message,
+                    app_context,
+                    reference_code,
+                    RuntimeError(f"Повторная покупка одноразового тарифа {plan.code}"),
+                )
+                await message.answer(
+                    "Оплата Stars получена, но этот тариф уже был куплен раньше. "
+                    "Администратор уже видит ситуацию и поможет вручную."
+                )
+                return
+        if invoice.status == InvoiceStatus.rejected.value:
+            await session.commit()
+            await message.answer(
+                "Оплата Stars уже зафиксирована как спорная. Администратор видит её и поможет вручную."
+            )
+            return
         await session.flush()
         try:
             await schedule_invoice_provisioning(
@@ -317,6 +334,7 @@ async def invoice_paid(callback: CallbackQuery, callback_data: InvoiceAction, ap
         await session.commit()
         admin_text = format_invoice_for_admin(invoice, user)
 
+    notified_admins = 0
     for admin_id in app_context.settings.app.admin_ids:
         try:
             await callback.bot.send_message(
@@ -324,8 +342,19 @@ async def invoice_paid(callback: CallbackQuery, callback_data: InvoiceAction, ap
                 admin_text,
                 reply_markup=admin_invoice_keyboard(invoice.id),
             )
+            notified_admins += 1
         except TelegramAPIError:
             logging.exception("Failed to notify admin %s about invoice %s", admin_id, invoice.id)
+
+    if notified_admins == 0:
+        async with app_context.session_factory() as session:
+            invoice = await session.scalar(select(Invoice).where(Invoice.id == callback_data.invoice_id))
+            if invoice is not None and invoice.status == InvoiceStatus.pending_review.value:
+                invoice.status = InvoiceStatus.awaiting_transfer.value
+                await session.commit()
+        await callback.answer("Не смог уведомить администратора. Попробуйте ещё раз.", show_alert=True)
+        await callback.message.answer("Не смог отправить платёж администратору. Нажмите «Я оплатил» ещё раз.")
+        return
 
     await callback.answer("Передал платёж админу на проверку.")
     await callback.message.answer("Платёж отправлен на проверку. Как только подтвержу перевод, пришлю доступ.")

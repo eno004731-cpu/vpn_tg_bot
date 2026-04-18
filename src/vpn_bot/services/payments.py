@@ -5,16 +5,23 @@ from dataclasses import dataclass
 from datetime import timedelta
 from decimal import Decimal
 from html import escape
-from typing import Optional
+from typing import Mapping, Optional
 
 from sqlalchemy import and_, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from vpn_bot.config import PaymentSettings, PlanDefinition
-from vpn_bot.models import Invoice, InvoiceStatus, User
+from vpn_bot.models import Invoice, InvoiceStatus, OneTimePlanPurchase, User
 from vpn_bot.utils import decimal_to_kopecks, ensure_utc, format_card_number, utc_now
 
-OPEN_INVOICE_STATUSES = (
+EXPIRABLE_INVOICE_STATUSES = (InvoiceStatus.awaiting_transfer.value,)
+PURCHASED_PLAN_STATUSES = (
+    InvoiceStatus.paid_pending_provision.value,
+    InvoiceStatus.provision_failed.value,
+    InvoiceStatus.paid.value,
+)
+REJECTABLE_INVOICE_STATUSES = (
     InvoiceStatus.awaiting_transfer.value,
     InvoiceStatus.pending_review.value,
 )
@@ -33,6 +40,10 @@ class InvoiceView:
 class StarsPayload:
     plan_code: str
     user_tg_id: int
+
+
+class OneTimePlanAlreadyPurchased(ValueError):
+    pass
 
 
 def reserve_unique_amount(base_amount: Decimal, used_kopecks: set[int], seed: int) -> Decimal:
@@ -110,11 +121,58 @@ async def user_has_paid_plan(session: AsyncSession, user_id: int, plan_code: str
         .where(
             Invoice.user_id == user_id,
             Invoice.plan_code == plan_code,
-            Invoice.paid_at.is_not(None),
+            Invoice.status.in_(PURCHASED_PLAN_STATUSES),
         )
         .limit(1)
     )
     return invoice_id is not None
+
+
+async def reserve_one_time_plan_purchase(
+    session: AsyncSession,
+    invoice: Invoice,
+    plans: Optional[Mapping[str, PlanDefinition]],
+) -> None:
+    plan = _get_plan(plans, invoice.plan_code)
+    if plan is None or not plan.one_time_per_user:
+        return
+
+    existing_purchase = await session.scalar(
+        select(OneTimePlanPurchase).where(
+            OneTimePlanPurchase.user_id == invoice.user_id,
+            OneTimePlanPurchase.plan_code == invoice.plan_code,
+        )
+    )
+    if existing_purchase is not None:
+        if existing_purchase.invoice_id == invoice.id:
+            return
+        raise OneTimePlanAlreadyPurchased(_one_time_error_message())
+
+    existing_paid_invoice_id = await session.scalar(
+        select(Invoice.id)
+        .where(
+            Invoice.user_id == invoice.user_id,
+            Invoice.plan_code == invoice.plan_code,
+            Invoice.id != invoice.id,
+            Invoice.status.in_(PURCHASED_PLAN_STATUSES),
+        )
+        .limit(1)
+    )
+    if existing_paid_invoice_id is not None:
+        raise OneTimePlanAlreadyPurchased(_one_time_error_message())
+
+    try:
+        async with session.begin_nested():
+            session.add(
+                OneTimePlanPurchase(
+                    user_id=invoice.user_id,
+                    plan_code=invoice.plan_code,
+                    invoice_id=invoice.id,
+                )
+            )
+            await session.flush()
+    except IntegrityError as exc:
+        raise OneTimePlanAlreadyPurchased(_one_time_error_message()) from exc
 
 
 async def create_stars_invoice_record(
@@ -124,6 +182,11 @@ async def create_stars_invoice_record(
     telegram_payment_charge_id: str,
     total_stars: int,
 ) -> Invoice:
+    reference_code = build_stars_reference(telegram_payment_charge_id)
+    existing = await session.scalar(select(Invoice).where(Invoice.reference_code == reference_code))
+    if existing is not None:
+        return existing
+
     now = utc_now()
     invoice = Invoice(
         user_id=user.id,
@@ -133,12 +196,19 @@ async def create_stars_invoice_record(
         traffic_limit_bytes=plan.traffic_limit_bytes,
         amount_rub=Decimal(total_stars),
         amount_kopecks=total_stars,
-        reference_code=build_stars_reference(telegram_payment_charge_id),
+        reference_code=reference_code,
         status=InvoiceStatus.awaiting_transfer.value,
         expires_at=now + timedelta(minutes=15),
     )
-    session.add(invoice)
-    await session.flush()
+    try:
+        async with session.begin_nested():
+            session.add(invoice)
+            await session.flush()
+    except IntegrityError:
+        existing = await session.scalar(select(Invoice).where(Invoice.reference_code == reference_code))
+        if existing is not None:
+            return existing
+        raise
     return invoice
 
 
@@ -190,12 +260,14 @@ def mark_invoice_pending_review(invoice: Invoice) -> None:
 
 
 def reject_invoice(invoice: Invoice, note: Optional[str] = None) -> None:
+    if invoice.status not in REJECTABLE_INVOICE_STATUSES:
+        raise ValueError("Инвойс нельзя отклонить в текущем статусе.")
     invoice.status = InvoiceStatus.rejected.value
     invoice.admin_note = note
 
 
 def expire_open_invoice(invoice: Invoice) -> None:
-    if invoice.status in OPEN_INVOICE_STATUSES:
+    if invoice.status in EXPIRABLE_INVOICE_STATUSES:
         invoice.status = InvoiceStatus.expired.value
 
 
@@ -204,7 +276,7 @@ async def expire_stale_invoices(session: AsyncSession) -> int:
     invoices = list(
         await session.scalars(
             select(Invoice).where(
-                Invoice.status.in_(OPEN_INVOICE_STATUSES),
+                Invoice.status.in_(EXPIRABLE_INVOICE_STATUSES),
                 Invoice.expires_at <= now,
             )
         )
@@ -216,3 +288,16 @@ async def expire_stale_invoices(session: AsyncSession) -> int:
     if invoices:
         await session.commit()
     return len(invoices)
+
+
+def _get_plan(plans: Optional[Mapping[str, PlanDefinition]], plan_code: str) -> Optional[PlanDefinition]:
+    if plans is None:
+        return None
+    get = getattr(plans, "get", None)
+    if get is None:
+        return None
+    return get(plan_code)
+
+
+def _one_time_error_message() -> str:
+    return "Этот тариф можно купить только один раз."

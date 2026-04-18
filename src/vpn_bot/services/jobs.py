@@ -11,6 +11,7 @@ from typing import Any, Mapping, Optional
 from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError
 from sqlalchemy import func, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -24,6 +25,7 @@ from vpn_bot.metrics import (
 from vpn_bot.models import Invoice, InvoiceStatus, Job, JobStatus, JobType, Subscription, SubscriptionStatus
 from vpn_bot.services.crypto import decrypt_value, encrypt_value
 from vpn_bot.services.nodes import NodeRegistry
+from vpn_bot.services.payments import reserve_one_time_plan_purchase
 from vpn_bot.services.subscriptions import build_xui_email, get_plan_device_limit
 from vpn_bot.services.xui import ProvisionedClient
 from vpn_bot.utils import ensure_utc, utc_now
@@ -72,8 +74,15 @@ async def create_job_once(
         max_attempts=MAX_JOB_ATTEMPTS,
         run_after=run_after or utc_now(),
     )
-    session.add(job)
-    await session.flush()
+    try:
+        async with session.begin_nested():
+            session.add(job)
+            await session.flush()
+    except IntegrityError:
+        existing = await session.scalar(select(Job).where(Job.idempotency_key == idempotency_key))
+        if existing is not None:
+            return existing
+        raise
     return job
 
 
@@ -107,6 +116,8 @@ async def schedule_invoice_provisioning(
         InvoiceStatus.provision_failed.value,
     }:
         raise ValueError("Инвойс нельзя активировать в текущем статусе.")
+
+    await reserve_one_time_plan_purchase(session, invoice, plans)
 
     job = await session.scalar(select(Job).where(Job.idempotency_key == f"provision:invoice:{invoice.id}"))
     if job is None:

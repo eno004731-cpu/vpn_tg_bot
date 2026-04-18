@@ -11,7 +11,7 @@ from sqlalchemy import select
 
 from vpn_bot.config import AppSettings, PaymentSettings, PlanDefinition, Settings, TrafficPolicySettings, XUISettings
 from vpn_bot.database import build_session_factory, init_db
-from vpn_bot.handlers.user import invoice_paid, stars_payment_selected, stars_pre_checkout
+from vpn_bot.handlers.user import invoice_paid, stars_payment_selected, stars_pre_checkout, transfer_payment_selected
 from vpn_bot.keyboards import InvoiceAction, PaymentMethodChoice
 from vpn_bot.models import Invoice, InvoiceStatus, User
 from vpn_bot.runtime import AppContext
@@ -130,6 +130,18 @@ def make_trial_plan() -> PlanDefinition:
     )
 
 
+def make_one_time_transfer_plan() -> PlanDefinition:
+    return PlanDefinition(
+        code="transfer_trial",
+        title="Transfer trial",
+        price_rub=Decimal("100.00"),
+        duration_days=3,
+        traffic_limit_gb=30,
+        device_limit=1,
+        one_time_per_user=True,
+    )
+
+
 async def test_invoice_paid_does_not_re_notify_paid_invoice(tmp_path) -> None:
     settings = make_settings(admin_ids=(1, 2))
     engine, session_factory = build_session_factory(tmp_path / "bot.sqlite3")
@@ -185,6 +197,35 @@ async def test_invoice_paid_continues_when_one_admin_notification_fails(tmp_path
     ]
 
 
+async def test_invoice_paid_rolls_back_when_all_admin_notifications_fail(tmp_path) -> None:
+    settings = make_settings(admin_ids=(1, 2))
+    engine, session_factory = build_session_factory(tmp_path / "bot.sqlite3")
+    await init_db(engine)
+    nodes = NodeRegistry.from_settings(settings)
+    context = AppContext(settings=settings, plans={}, engine=engine, session_factory=session_factory, nodes=nodes)
+    bot = FakeBot(fail_chat_ids=(1, 2))
+    callback = FakeCallback(user_id=123, bot=bot)
+
+    try:
+        async with session_factory() as session:
+            invoice = await add_invoice(session, tg_id=123, status=InvoiceStatus.awaiting_transfer.value)
+            await session.commit()
+
+        await invoice_paid(callback, InvoiceAction(action="paid", invoice_id=invoice.id), context)
+
+        async with session_factory() as session:
+            stored_invoice = await session.scalar(select(Invoice).where(Invoice.id == invoice.id))
+    finally:
+        await nodes.close()
+        await engine.dispose()
+
+    assert stored_invoice is not None
+    assert stored_invoice.status == InvoiceStatus.awaiting_transfer.value
+    assert bot.messages == []
+    assert callback.answers == [("Не смог уведомить администратора. Попробуйте ещё раз.", True)]
+    assert callback.message.answers == [("Не смог отправить платёж администратору. Нажмите «Я оплатил» ещё раз.", None)]
+
+
 async def test_stars_payment_selected_blocks_second_trial_purchase(tmp_path) -> None:
     settings = make_settings(admin_ids=(1,))
     engine, session_factory = build_session_factory(tmp_path / "bot.sqlite3")
@@ -215,6 +256,42 @@ async def test_stars_payment_selected_blocks_second_trial_purchase(tmp_path) -> 
 
     assert bot.invoices == []
     assert callback.answers == [("Этот тариф можно купить только один раз.", True)]
+
+
+async def test_transfer_payment_selected_blocks_second_one_time_purchase(tmp_path) -> None:
+    settings = make_settings(admin_ids=(1,))
+    engine, session_factory = build_session_factory(tmp_path / "bot.sqlite3")
+    await init_db(engine)
+    nodes = NodeRegistry.from_settings(settings)
+    plan = make_one_time_transfer_plan()
+    context = AppContext(
+        settings=settings,
+        plans={plan.code: plan},
+        engine=engine,
+        session_factory=session_factory,
+        nodes=nodes,
+    )
+    bot = FakeBot()
+    callback = FakeCallback(user_id=123, bot=bot)
+
+    try:
+        async with session_factory() as session:
+            invoice = await add_invoice(session, tg_id=123, status=InvoiceStatus.paid.value)
+            invoice.plan_code = plan.code
+            invoice.paid_at = utc_now()
+            await session.commit()
+
+        await transfer_payment_selected(callback, PaymentMethodChoice(code=plan.code, method="transfer"), context)
+
+        async with session_factory() as session:
+            invoice_count = len(list(await session.scalars(select(Invoice))))
+    finally:
+        await nodes.close()
+        await engine.dispose()
+
+    assert invoice_count == 1
+    assert callback.answers == [("Этот тариф можно купить только один раз.", True)]
+    assert callback.message.answers == []
 
 
 async def test_stars_pre_checkout_rejects_second_trial_purchase(tmp_path) -> None:

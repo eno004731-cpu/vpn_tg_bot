@@ -15,6 +15,7 @@ from vpn_bot.config import PlanDefinition, Settings, TrafficPolicySettings
 from vpn_bot.models import Invoice, InvoiceStatus, Subscription, SubscriptionStatus, User
 from vpn_bot.services.crypto import decrypt_value, encrypt_value
 from vpn_bot.services.nodes import NodeRegistry
+from vpn_bot.services.payments import reserve_one_time_plan_purchase
 from vpn_bot.services.xui import TrafficSnapshot, XUIClient
 from vpn_bot.utils import ensure_utc, utc_now
 
@@ -77,6 +78,8 @@ async def activate_invoice(
         InvoiceStatus.pending_review.value,
     }:
         raise ValueError("Инвойс нельзя активировать в текущем статусе.")
+
+    await reserve_one_time_plan_purchase(session, invoice, plans)
 
     now = utc_now()
     node = await nodes.select_node_for_new_subscription(session)

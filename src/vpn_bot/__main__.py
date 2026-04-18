@@ -26,6 +26,7 @@ async def migrate_sqlite_to_postgres_command(sqlite_path: str, database_url: str
         "Migrated "
         f"users={summary.users}, "
         f"invoices={summary.invoices}, "
+        f"one_time_plan_purchases={summary.one_time_plan_purchases}, "
         f"subscriptions={summary.subscriptions}, "
         f"jobs={summary.jobs}"
     )

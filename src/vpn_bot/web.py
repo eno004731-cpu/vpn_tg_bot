@@ -25,6 +25,7 @@ from vpn_bot.metrics import (
 from vpn_bot.runtime import AppContext
 
 TELEGRAM_SECRET_TOKEN_HEADER = "X-Telegram-Bot-Api-Secret-Token"
+ALLOWED_WEBHOOK_UPDATES = ["message", "callback_query", "pre_checkout_query"]
 APP_CONTEXT_KEY = web.AppKey("app_context", AppContext)
 BOT_KEY = web.AppKey("bot", Bot)
 DISPATCHER_KEY = web.AppKey("dispatcher", Dispatcher)
@@ -77,6 +78,22 @@ async def readyz(request: web.Request) -> web.Response:
 async def metrics(request: web.Request) -> web.Response:
     payload, content_type = render_metrics()
     return web.Response(body=payload, headers={"Content-Type": content_type})
+
+
+def build_webhook_url(context: AppContext) -> str:
+    return (
+        f"{context.settings.app.public_webhook_base_url.rstrip('/')}"
+        f"/telegram/{context.settings.app.webhook_path_secret}"
+    )
+
+
+async def configure_telegram_webhook(bot: Bot, context: AppContext) -> None:
+    await bot.set_webhook(
+        url=build_webhook_url(context),
+        secret_token=context.settings.app.webhook_secret_token,
+        allowed_updates=ALLOWED_WEBHOOK_UPDATES,
+        drop_pending_updates=False,
+    )
 
 
 async def telegram_webhook(request: web.Request) -> web.Response:
@@ -153,6 +170,7 @@ async def run_web() -> None:
             with contextlib.suppress(NotImplementedError):
                 loop.add_signal_handler(signum, stop_event.set)
         await site.start()
+        await configure_telegram_webhook(bot, context)
         await stop_event.wait()
     finally:
         stop_event.set()

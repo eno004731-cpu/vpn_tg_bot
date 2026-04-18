@@ -333,7 +333,14 @@ async def _reject_invoice(
             else:
                 await target.answer("Инвойс не найден.")
             return
-        reject_invoice(invoice, note)
+        try:
+            reject_invoice(invoice, note)
+        except ValueError as exc:
+            if isinstance(target, CallbackQuery):
+                await target.answer(str(exc), show_alert=True)
+            else:
+                await target.answer(str(exc))
+            return
         await session.commit()
 
     if isinstance(target, CallbackQuery):

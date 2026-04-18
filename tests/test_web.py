@@ -13,7 +13,7 @@ from vpn_bot.database import build_session_factory, init_db
 from vpn_bot.metrics import WEBHOOK_REJECTIONS_TOTAL
 from vpn_bot.runtime import AppContext
 from vpn_bot.services.nodes import NodeRegistry
-from vpn_bot.web import create_web_app, healthz, metrics, readyz, telegram_webhook
+from vpn_bot.web import configure_telegram_webhook, create_web_app, healthz, metrics, readyz, telegram_webhook
 
 
 def make_settings() -> Settings:
@@ -47,6 +47,14 @@ def make_settings() -> Settings:
         secrets_file=Path("secrets/runtime.toml"),
         plans_file=Path("config/plans.toml"),
     )
+
+
+class FakeWebhookBot:
+    def __init__(self) -> None:
+        self.webhook_calls = []
+
+    async def set_webhook(self, **kwargs) -> None:
+        self.webhook_calls.append(kwargs)
 
 
 async def test_health_ready_and_webhook_secret_check(tmp_path) -> None:
@@ -165,3 +173,32 @@ async def test_readyz_returns_draining_when_stop_event_set(tmp_path) -> None:
         await engine.dispose()
 
     assert response.status == 503
+
+
+async def test_configure_telegram_webhook_uses_public_base_url(tmp_path) -> None:
+    settings = make_settings()
+    engine, session_factory = build_session_factory(tmp_path / "bot.sqlite3")
+    await init_db(engine)
+    nodes = NodeRegistry.from_settings(settings)
+    context = AppContext(
+        settings=settings,
+        plans={},
+        engine=engine,
+        session_factory=session_factory,
+        nodes=nodes,
+    )
+    bot = FakeWebhookBot()
+    try:
+        await configure_telegram_webhook(bot, context)  # type: ignore[arg-type]
+    finally:
+        await nodes.close()
+        await engine.dispose()
+
+    assert bot.webhook_calls == [
+        {
+            "url": "https://panel.swift-log.ru/telegram/telegram-path",
+            "secret_token": "telegram-token",
+            "allowed_updates": ["message", "callback_query", "pre_checkout_query"],
+            "drop_pending_updates": False,
+        }
+    ]
