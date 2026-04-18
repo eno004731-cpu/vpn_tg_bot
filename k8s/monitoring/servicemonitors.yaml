@@ -1,0 +1,39 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: vpn-bot-web
+  namespace: vpn-prod
+  labels:
+    app.kubernetes.io/part-of: vpn-bot
+spec:
+  namespaceSelector:
+    matchNames:
+      - vpn-prod
+  selector:
+    matchLabels:
+      app: vpn-bot-web
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s
+      scrapeTimeout: 10s
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: vpn-bot-worker
+  namespace: vpn-prod
+  labels:
+    app.kubernetes.io/part-of: vpn-bot
+spec:
+  namespaceSelector:
+    matchNames:
+      - vpn-prod
+  selector:
+    matchLabels:
+      app: vpn-bot-worker
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: 30s
+      scrapeTimeout: 10s

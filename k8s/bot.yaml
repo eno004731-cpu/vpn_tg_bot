@@ -4,10 +4,12 @@ metadata:
   name: vpn-bot-env
   namespace: vpn-prod
 data:
-  VPN_BOT_SECRETS_FILE: /vault/secrets/runtime.toml
+  VPN_BOT_SECRETS_FILE: /etc/vpn-bot-secrets/runtime.toml
   VPN_BOT_PLANS_FILE: /app/config/plans.toml
   VPN_BOT_WEB_HOST: 0.0.0.0
   VPN_BOT_WEB_PORT: "8080"
+  VPN_BOT_WORKER_METRICS_HOST: 0.0.0.0
+  VPN_BOT_WORKER_METRICS_PORT: "9091"
   VPN_BOT_PUBLIC_WEBHOOK_BASE_URL: https://panel.swift-log.ru
 ---
 apiVersion: v1
@@ -15,6 +17,8 @@ kind: Service
 metadata:
   name: vpn-bot-web
   namespace: vpn-prod
+  labels:
+    app: vpn-bot-web
 spec:
   selector:
     app: vpn-bot-web
@@ -37,16 +41,9 @@ spec:
     metadata:
       labels:
         app: vpn-bot-web
-      annotations:
-        vault.hashicorp.com/agent-inject: "true"
-        vault.hashicorp.com/role: vpn-bot
-        vault.hashicorp.com/agent-inject-secret-runtime.toml: kv/data/vpn-bot/runtime
-        vault.hashicorp.com/agent-inject-template-runtime.toml: |
-          {{- with secret "kv/data/vpn-bot/runtime" -}}
-          {{ .Data.data.runtime_toml }}
-          {{- end -}}
     spec:
       serviceAccountName: vpn-bot
+      terminationGracePeriodSeconds: 60
       containers:
         - name: vpn-bot
           image: ghcr.io/eno004731-cpu/vpn_tg_bot:latest
@@ -57,6 +54,10 @@ spec:
           envFrom:
             - configMapRef:
                 name: vpn-bot-env
+          volumeMounts:
+            - name: runtime-secret
+              mountPath: /etc/vpn-bot-secrets
+              readOnly: true
           ports:
             - name: http
               containerPort: 8080
@@ -79,6 +80,25 @@ spec:
             limits:
               cpu: 500m
               memory: 512Mi
+      volumes:
+        - name: runtime-secret
+          secret:
+            secretName: vpn-bot-runtime
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vpn-bot-worker-metrics
+  namespace: vpn-prod
+  labels:
+    app: vpn-bot-worker
+spec:
+  selector:
+    app: vpn-bot-worker
+  ports:
+    - name: metrics
+      port: 9091
+      targetPort: metrics
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -94,16 +114,9 @@ spec:
     metadata:
       labels:
         app: vpn-bot-worker
-      annotations:
-        vault.hashicorp.com/agent-inject: "true"
-        vault.hashicorp.com/role: vpn-bot
-        vault.hashicorp.com/agent-inject-secret-runtime.toml: kv/data/vpn-bot/runtime
-        vault.hashicorp.com/agent-inject-template-runtime.toml: |
-          {{- with secret "kv/data/vpn-bot/runtime" -}}
-          {{ .Data.data.runtime_toml }}
-          {{- end -}}
     spec:
       serviceAccountName: vpn-bot
+      terminationGracePeriodSeconds: 60
       containers:
         - name: vpn-bot
           image: ghcr.io/eno004731-cpu/vpn_tg_bot:latest
@@ -114,6 +127,25 @@ spec:
           envFrom:
             - configMapRef:
                 name: vpn-bot-env
+          volumeMounts:
+            - name: runtime-secret
+              mountPath: /etc/vpn-bot-secrets
+              readOnly: true
+          ports:
+            - name: metrics
+              containerPort: 9091
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: metrics
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: metrics
+            initialDelaySeconds: 10
+            periodSeconds: 10
           resources:
             requests:
               cpu: 100m
@@ -121,3 +153,7 @@ spec:
             limits:
               cpu: 500m
               memory: 512Mi
+      volumes:
+        - name: runtime-secret
+          secret:
+            secretName: vpn-bot-runtime

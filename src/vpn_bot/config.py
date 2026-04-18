@@ -32,6 +32,8 @@ class AppSettings:
     worker_interval_seconds: int = 5
     web_host: str = "0.0.0.0"
     web_port: int = 8080
+    worker_metrics_host: str = "0.0.0.0"
+    worker_metrics_port: int = 9091
     webhook_path_secret: Optional[str] = None
     webhook_secret_token: Optional[str] = None
     public_webhook_base_url: str = "https://panel.swift-log.ru"
@@ -328,6 +330,18 @@ def load_settings() -> Settings:
             ),
             web_host=_coalesce(os.getenv("VPN_BOT_WEB_HOST"), app.get("web_host"), default="0.0.0.0"),
             web_port=int(_coalesce(_env_int("VPN_BOT_WEB_PORT"), app.get("web_port"), default=8080)),
+            worker_metrics_host=_coalesce(
+                os.getenv("VPN_BOT_WORKER_METRICS_HOST"),
+                app.get("worker_metrics_host"),
+                default="0.0.0.0",
+            ),
+            worker_metrics_port=int(
+                _coalesce(
+                    _env_int("VPN_BOT_WORKER_METRICS_PORT"),
+                    app.get("worker_metrics_port"),
+                    default=9091,
+                )
+            ),
             webhook_path_secret=_coalesce(
                 os.getenv("VPN_BOT_WEBHOOK_PATH_SECRET"),
                 app.get("webhook_path_secret"),

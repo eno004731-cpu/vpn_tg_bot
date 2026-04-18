@@ -104,10 +104,6 @@ async def transfer_payment_selected(
 
     async with app_context.session_factory() as session:
         user = await ensure_user(session, callback.from_user, app_context.settings.app.admin_ids)
-        if plan.one_time_per_user and await user_has_paid_plan(session, user.id, plan.code):
-            await session.commit()
-            await callback.answer(_one_time_plan_error(), show_alert=True)
-            return
         invoice = await create_invoice(session, user, plan, app_context.settings.payment)
 
     await callback.message.answer(

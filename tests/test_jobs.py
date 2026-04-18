@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import timedelta
 from decimal import Decimal
 from pathlib import Path
 
 from sqlalchemy import select
 
-from vpn_bot.config import AppSettings, PaymentSettings, PlanDefinition, Settings, TrafficPolicySettings, XUISettings
+from vpn_bot.app import background_jobs
+from vpn_bot.config import AppSettings, PaymentSettings, Settings, TrafficPolicySettings, XUISettings
 from vpn_bot.database import build_session_factory, init_db
 from vpn_bot.models import Invoice, InvoiceStatus, Job, JobStatus, JobType, Subscription, User
+from vpn_bot.runtime import AppContext
 from vpn_bot.services.jobs import process_one_job, schedule_invoice_provisioning
 from vpn_bot.services.xui import ProvisionedClient
 from vpn_bot.utils import utc_now
@@ -133,16 +136,6 @@ async def test_schedule_invoice_provisioning_creates_pending_job(tmp_path) -> No
 async def test_worker_provisions_access_then_sends_notification(tmp_path) -> None:
     node = make_node()
     settings = make_settings(node)
-    plans = {
-        "starter": PlanDefinition(
-            code="starter",
-            title="Starter",
-            price_rub=Decimal("100.00"),
-            duration_days=30,
-            traffic_limit_gb=1,
-            device_limit=1,
-        )
-    }
     panel = FakePanel()
     nodes = FakeNodes(node, panel)
     bot = FakeBot()
@@ -152,10 +145,10 @@ async def test_worker_provisions_access_then_sends_notification(tmp_path) -> Non
     async with session_factory() as session:
         invoice = await make_invoice(session)
         await session.commit()
-        await schedule_invoice_provisioning(session, settings, nodes, invoice.id, plans)
+        await schedule_invoice_provisioning(session, settings, nodes, invoice.id)
 
     async with session_factory() as session:
-        assert await process_one_job(session, settings, nodes, bot, plans)
+        assert await process_one_job(session, settings, nodes, bot)
 
     async with session_factory() as session:
         subscription = await session.scalar(select(Subscription))
@@ -171,5 +164,39 @@ async def test_worker_provisions_access_then_sends_notification(tmp_path) -> Non
     assert subscription is not None
     assert subscription.access_url.startswith("enc:v1:")
     assert send_job is not None
-    assert panel.add_calls[0][1]["limit_ip"] == 1
     assert bot.messages and bot.messages[0][0] == 123
+
+
+async def test_background_jobs_shutdown_does_not_leave_running_jobs(tmp_path) -> None:
+    node = make_node()
+    settings = make_settings(node)
+    settings.app.worker_interval_seconds = 1
+    panel = FakePanel()
+    nodes = FakeNodes(node, panel)
+    bot = FakeBot()
+    engine, session_factory = build_session_factory(tmp_path / "bot.sqlite3")
+    await init_db(engine)
+
+    async with session_factory() as session:
+        invoice = await make_invoice(session)
+        await session.commit()
+        await schedule_invoice_provisioning(session, settings, nodes, invoice.id)
+
+    context = AppContext(
+        settings=settings,
+        plans={},
+        engine=engine,
+        session_factory=session_factory,
+        nodes=nodes,  # type: ignore[arg-type]
+    )
+    stop_event = asyncio.Event()
+    task = asyncio.create_task(background_jobs(context, bot, stop_event))
+    await asyncio.sleep(0.05)
+    stop_event.set()
+    await asyncio.wait_for(task, timeout=1)
+
+    async with session_factory() as session:
+        running_jobs = (await session.scalars(select(Job).where(Job.status == JobStatus.running.value))).all()
+
+    await engine.dispose()
+    assert running_jobs == []

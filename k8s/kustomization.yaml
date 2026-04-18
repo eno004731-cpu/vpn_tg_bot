@@ -3,6 +3,6 @@ kind: Kustomization
 resources:
   - namespace.yaml
   - postgres.yaml
-  - vault.yaml
   - bot.yaml
+  - backups.yaml
   - ingress.yaml

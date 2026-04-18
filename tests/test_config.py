@@ -16,9 +16,7 @@ duration_days = 0
 traffic_limit_gb = 0
 daily_limit_gb = 1
 description = "Проверка оплаты."
-provision_access = true
-device_limit = 1
-one_time_per_user = true
+provision_access = false
 """,
         encoding="utf-8",
     )
@@ -27,12 +25,10 @@ one_time_per_user = true
 
     assert plan.supports_stars
     assert not plan.supports_transfer
-    assert plan.provision_access
+    assert not plan.provision_access
     assert plan.price_stars == 1
     assert plan.daily_limit_gb == 1
     assert plan.daily_limit_bytes == 1024 * 1024 * 1024
-    assert plan.device_limit == 1
-    assert plan.one_time_per_user is True
 
 
 def write_runtime_config(tmp_path, xui_block: str) -> None:
@@ -77,6 +73,8 @@ public_port = 443
 
     assert settings.xui.node_code == "main"
     assert settings.app.database_url == "postgresql://vpn:secret@postgres:5432/vpn_bot"
+    assert settings.app.worker_metrics_host == "0.0.0.0"
+    assert settings.app.worker_metrics_port == 9091
     assert settings.xui.public_host == "vpn.example.com"
     assert [node.node_code for node in settings.all_xui_nodes] == ["main"]
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -9,9 +10,10 @@ from aiohttp.test_utils import make_mocked_request
 
 from vpn_bot.config import AppSettings, PaymentSettings, Settings, TrafficPolicySettings, XUISettings
 from vpn_bot.database import build_session_factory, init_db
+from vpn_bot.metrics import WEBHOOK_REJECTIONS_TOTAL
 from vpn_bot.runtime import AppContext
 from vpn_bot.services.nodes import NodeRegistry
-from vpn_bot.web import create_web_app, healthz, readyz, telegram_webhook
+from vpn_bot.web import create_web_app, healthz, metrics, readyz, telegram_webhook
 
 
 def make_settings() -> Settings:
@@ -80,6 +82,40 @@ async def test_health_ready_and_webhook_secret_check(tmp_path) -> None:
     assert ready.status == 200
 
 
+async def test_metrics_endpoint_and_rejection_counter(tmp_path) -> None:
+    settings = make_settings()
+    engine, session_factory = build_session_factory(tmp_path / "bot.sqlite3")
+    await init_db(engine)
+    nodes = NodeRegistry.from_settings(settings)
+    context = AppContext(
+        settings=settings,
+        plans={},
+        engine=engine,
+        session_factory=session_factory,
+        nodes=nodes,
+    )
+    app = create_web_app(context, bot=object(), dispatcher=object())
+    before = WEBHOOK_REJECTIONS_TOTAL.labels(reason="secret_token")._value.get()
+    try:
+        with pytest.raises(web.HTTPUnauthorized):
+            await telegram_webhook(
+                SimpleNamespace(
+                    app=app,
+                    match_info={"secret": "telegram-path"},
+                    headers={"X-Telegram-Bot-Api-Secret-Token": "wrong-token"},
+                )
+            )
+        metrics_response = await metrics(make_mocked_request("GET", "/metrics", app=app))
+    finally:
+        await nodes.close()
+        await engine.dispose()
+
+    payload = metrics_response.body.decode("utf-8")
+    assert WEBHOOK_REJECTIONS_TOTAL.labels(reason="secret_token")._value.get() == before + 1
+    assert "vpn_bot_webhook_requests_total" in payload
+    assert "vpn_bot_webhook_rejections_total" in payload
+
+
 async def test_webhook_rejects_wrong_path_secret(tmp_path) -> None:
     settings = make_settings()
     engine, session_factory = build_session_factory(tmp_path / "bot.sqlite3")
@@ -105,3 +141,27 @@ async def test_webhook_rejects_wrong_path_secret(tmp_path) -> None:
     finally:
         await nodes.close()
         await engine.dispose()
+
+
+async def test_readyz_returns_draining_when_stop_event_set(tmp_path) -> None:
+    settings = make_settings()
+    engine, session_factory = build_session_factory(tmp_path / "bot.sqlite3")
+    await init_db(engine)
+    nodes = NodeRegistry.from_settings(settings)
+    stop_event = asyncio.Event()
+    context = AppContext(
+        settings=settings,
+        plans={},
+        engine=engine,
+        session_factory=session_factory,
+        nodes=nodes,
+    )
+    app = create_web_app(context, bot=object(), dispatcher=object(), stop_event=stop_event)
+    stop_event.set()
+    try:
+        response = await readyz(make_mocked_request("GET", "/readyz", app=app))
+    finally:
+        await nodes.close()
+        await engine.dispose()
+
+    assert response.status == 503

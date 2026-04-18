@@ -1,0 +1,10 @@
+[Unit]
+Description=Run nightly VPN bot host backup at 03:30 MSK
+
+[Timer]
+OnCalendar=*-*-* 03:30:00 Europe/Moscow
+Persistent=true
+RandomizedDelaySec=5m
+
+[Install]
+WantedBy=timers.target

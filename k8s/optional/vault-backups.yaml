@@ -1,0 +1,62 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: vault-nightly-backup
+  namespace: vpn-prod
+spec:
+  schedule: "30 3 * * *"
+  timeZone: Europe/Moscow
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: vault-backup
+              image: alpine:3.20
+              command:
+                - /bin/sh
+                - -ec
+                - |
+                  timestamp="$(date +%Y%m%d-%H%M%S)"
+                  backup_root="/backup/vault"
+                  mkdir -p "$backup_root/daily" "$backup_root/weekly" /backup/logs
+                  log_file="/backup/logs/vault-backup-${timestamp}.log"
+                  exec >>"$log_file" 2>&1
+
+                  if [ ! -d /vault-source ] || [ -z "$(find /vault-source -mindepth 1 -maxdepth 1 2>/dev/null)" ]; then
+                    echo "Vault storage is not mounted or empty, skipping backup"
+                    exit 0
+                  fi
+
+                  archive="$backup_root/daily/vault-${timestamp}.tar.gz"
+                  tar -czf "$archive" -C /vault-source .
+                  tar -tzf "$archive" >/dev/null
+                  echo "Created archive: $archive"
+
+                  if [ "$(date +%u)" = "1" ]; then
+                    weekly_archive="$backup_root/weekly/vault-week-$(date +%G-W%V).tar.gz"
+                    cp "$archive" "$weekly_archive"
+                    echo "Created weekly archive: $weekly_archive"
+                  fi
+
+                  find "$backup_root/daily" -maxdepth 1 -type f | sort -r | tail -n +15 | xargs -r rm -f
+                  find "$backup_root/weekly" -maxdepth 1 -type f | sort -r | tail -n +9 | xargs -r rm -f
+                  echo "[$(date -Is)] Vault backup finished"
+              volumeMounts:
+                - name: backup-root
+                  mountPath: /backup
+                - name: vault-data
+                  mountPath: /vault-source
+                  readOnly: true
+          volumes:
+            - name: backup-root
+              hostPath:
+                path: /srv/backups/vpn-bot
+                type: DirectoryOrCreate
+            - name: vault-data
+              persistentVolumeClaim:
+                claimName: vault-data-vault-0
