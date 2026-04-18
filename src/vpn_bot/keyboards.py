@@ -171,6 +171,12 @@ def custom_plan_builder_keyboard(kind: str, days: int, devices: int) -> InlineKe
                     callback_data=CustomPlanAction(kind=kind, days=days, devices=devices, action="pay").pack(),
                 )
             ],
+            [
+                InlineKeyboardButton(
+                    text="Назад к тарифам",
+                    callback_data=UserNavigationAction(action="plans").pack(),
+                )
+            ],
         ]
     )
     return InlineKeyboardMarkup(inline_keyboard=rows)

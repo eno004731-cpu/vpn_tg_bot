@@ -218,6 +218,8 @@ async def test_custom_plan_builder_updates_days_and_devices(tmp_path) -> None:
     assert "Custom: 30 дней / 2 устройств / 756 ГБ" in text
     assert "Стоимость: <code>240.00</code> ₽ / <code>240</code> ⭐" in text
     assert markup is not None
+    button_texts = [button.text for row in markup.inline_keyboard for button in row]
+    assert button_texts[-2:] == ["Выбрать этот тариф", "Назад к тарифам"]
 
 
 async def test_custom_plan_builder_ignores_noop_day_increase_at_max(tmp_path) -> None:
