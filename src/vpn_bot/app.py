@@ -38,6 +38,8 @@ async def create_app_context() -> AppContext:
 
 async def run_bot() -> None:
     context = await create_app_context()
+    stop_event = asyncio.Event()
+    _install_stop_signal_handlers(stop_event)
     bot = Bot(
         context.settings.app.bot_token,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
@@ -46,11 +48,12 @@ async def run_bot() -> None:
     dispatcher.include_router(admin_router)
     dispatcher.include_router(user_router)
 
-    sync_task = asyncio.create_task(background_sync(context))
-    jobs_task = asyncio.create_task(background_jobs(context, bot))
+    sync_task = asyncio.create_task(background_sync(context, stop_event))
+    jobs_task = asyncio.create_task(background_jobs(context, bot, stop_event))
     try:
         await dispatcher.start_polling(bot, app_context=context)
     finally:
+        stop_event.set()
         sync_task.cancel()
         jobs_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
