@@ -16,6 +16,7 @@ from vpn_bot.keyboards import (
     InvoiceAction,
     PaymentMethodChoice,
     PlanChoice,
+    UserNavigationAction,
     admin_invoice_keyboard,
     custom_plan_builder_keyboard,
     format_custom_plan_builder,
@@ -113,6 +114,24 @@ async def plan_selected(callback: CallbackQuery, callback_data: PlanChoice, app_
         return
 
     await callback.message.answer(_format_plan_payment_choice(plan), reply_markup=payment_methods_keyboard(plan))
+    await _answer_callback(callback)
+
+
+@router.callback_query(UserNavigationAction.filter(F.action == "plans"))
+async def back_to_plans_selected(
+    callback: CallbackQuery, callback_data: UserNavigationAction, app_context: AppContext
+) -> None:
+    del callback_data
+    try:
+        await callback.message.edit_text(
+            "Выберите тариф:",
+            reply_markup=plans_keyboard(list(app_context.plans.values())),
+        )
+    except TelegramBadRequest as exc:
+        if _is_message_not_modified(exc):
+            await _answer_callback(callback)
+            return
+        raise
     await _answer_callback(callback)
 
 

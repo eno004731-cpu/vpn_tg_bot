@@ -12,6 +12,7 @@ from sqlalchemy import select
 from vpn_bot.config import AppSettings, PaymentSettings, PlanDefinition, Settings, TrafficPolicySettings, XUISettings
 from vpn_bot.database import build_session_factory, init_db
 from vpn_bot.handlers.user import (
+    back_to_plans_selected,
     buy_handler,
     custom_plan_selected,
     invoice_paid,
@@ -19,7 +20,7 @@ from vpn_bot.handlers.user import (
     stars_pre_checkout,
     transfer_payment_selected,
 )
-from vpn_bot.keyboards import CustomPlanAction, InvoiceAction, PaymentMethodChoice
+from vpn_bot.keyboards import CustomPlanAction, InvoiceAction, PaymentMethodChoice, UserNavigationAction
 from vpn_bot.models import Invoice, InvoiceStatus, User
 from vpn_bot.runtime import AppContext
 from vpn_bot.services.custom_plans import CUSTOM_PLAN_KIND, PREMIUM_PLAN_KIND, build_custom_plan_code
@@ -311,7 +312,42 @@ async def test_custom_premium_builder_pay_opens_payment_methods(tmp_path) -> Non
     assert "Custom Premium: 30 дней / 2 устройств / Безлимит" in text
     assert markup is not None
     button_texts = [button.text for row in markup.inline_keyboard for button in row]
-    assert button_texts == ["Перевод на карту / СБП", "Оплатить Stars: 540 ⭐"]
+    assert button_texts == ["Перевод на карту / СБП", "Оплатить Stars: 540 ⭐", "Назад к тарифам"]
+
+
+async def test_back_to_plans_edits_payment_screen_to_plan_list(tmp_path) -> None:
+    settings = make_settings(admin_ids=(1,))
+    engine, session_factory = build_session_factory(tmp_path / "bot.sqlite3")
+    await init_db(engine)
+    nodes = NodeRegistry.from_settings(settings)
+    plan = PlanDefinition(
+        code="starter",
+        title="Starter",
+        price_rub=Decimal("100.00"),
+        duration_days=30,
+        traffic_limit_gb=310,
+    )
+    context = AppContext(
+        settings=settings,
+        plans={plan.code: plan},
+        engine=engine,
+        session_factory=session_factory,
+        nodes=nodes,
+    )
+    callback = FakeCallback(user_id=123, bot=FakeBot())
+
+    try:
+        await back_to_plans_selected(callback, UserNavigationAction(action="plans"), context)
+    finally:
+        await nodes.close()
+        await engine.dispose()
+
+    assert callback.answers == [("", False)]
+    assert callback.message.edits
+    text, markup = callback.message.edits[0]
+    assert text == "Выберите тариф:"
+    button_texts = [button.text for row in markup.inline_keyboard for button in row]
+    assert button_texts[:3] == ["Собрать Custom", "Собрать Custom Premium", "Starter - 100.00 ₽"]
 
 
 async def test_dynamic_custom_transfer_invoice_uses_calculated_plan(tmp_path) -> None:

@@ -34,6 +34,10 @@ class CustomPlanAction(CallbackData, prefix="cp"):
     action: str
 
 
+class UserNavigationAction(CallbackData, prefix="user_nav"):
+    action: str
+
+
 class InvoiceAction(CallbackData, prefix="invoice"):
     action: str
     invoice_id: int
@@ -216,6 +220,14 @@ def payment_methods_keyboard(plan: PlanDefinition) -> InlineKeyboardMarkup:
                 )
             ]
         )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text="Назад к тарифам",
+                callback_data=UserNavigationAction(action="plans").pack(),
+            )
+        ]
+    )
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
