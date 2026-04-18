@@ -368,7 +368,7 @@ def load_settings() -> Settings:
             invoice_lifetime_hours=_coalesce(
                 _env_int("VPN_BOT_INVOICE_LIFETIME_HOURS"),
                 payment.get("invoice_lifetime_hours"),
-                default=12,
+                default=6,
             ),
             instruction_hint=_coalesce(os.getenv("VPN_BOT_INSTRUCTION_HINT"), payment.get("instruction_hint")),
         ),

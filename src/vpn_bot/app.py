@@ -17,6 +17,7 @@ from vpn_bot.metrics import observe_traffic_sync_failure, render_metrics
 from vpn_bot.runtime import AppContext
 from vpn_bot.services.jobs import process_one_job, refresh_job_metrics
 from vpn_bot.services.nodes import NodeRegistry
+from vpn_bot.services.payments import expire_stale_invoices
 from vpn_bot.services.subscriptions import sync_active_subscriptions
 
 
@@ -38,6 +39,8 @@ async def create_app_context() -> AppContext:
 
 async def run_bot() -> None:
     context = await create_app_context()
+    stop_event = asyncio.Event()
+    _install_stop_signal_handlers(stop_event)
     bot = Bot(
         context.settings.app.bot_token,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
@@ -46,11 +49,12 @@ async def run_bot() -> None:
     dispatcher.include_router(admin_router)
     dispatcher.include_router(user_router)
 
-    sync_task = asyncio.create_task(background_sync(context))
-    jobs_task = asyncio.create_task(background_jobs(context, bot))
+    sync_task = asyncio.create_task(background_sync(context, stop_event))
+    jobs_task = asyncio.create_task(background_jobs(context, bot, stop_event))
     try:
         await dispatcher.start_polling(bot, app_context=context)
     finally:
+        stop_event.set()
         sync_task.cancel()
         jobs_task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
@@ -91,6 +95,9 @@ async def background_sync(context: AppContext, stop_event: asyncio.Event) -> Non
     while not stop_event.is_set():
         try:
             async with context.session_factory() as session:
+                expired_count = await expire_stale_invoices(session)
+                if expired_count:
+                    logging.info("Expired %s stale invoices", expired_count)
                 await sync_active_subscriptions(session, context.nodes, context.settings, context.plans)
         except Exception:  # noqa: BLE001
             logging.exception("Traffic sync failed")

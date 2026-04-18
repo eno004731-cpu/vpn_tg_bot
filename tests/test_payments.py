@@ -1,6 +1,8 @@
 from datetime import timedelta
 from decimal import Decimal
 
+from sqlalchemy import select
+
 from vpn_bot.config import PaymentSettings, PlanDefinition
 from vpn_bot.database import build_session_factory, init_db
 from vpn_bot.models import Invoice, InvoiceStatus, User
@@ -8,6 +10,7 @@ from vpn_bot.services.payments import (
     build_stars_payload,
     build_stars_reference,
     create_invoice,
+    expire_stale_invoices,
     parse_stars_payload,
     reserve_unique_amount,
 )
@@ -132,3 +135,67 @@ async def test_get_open_invoices_for_user_hides_expired_awaiting_transfer(tmp_pa
     await engine.dispose()
 
     assert [invoice.reference_code for invoice in invoices] == ["VPN-000002"]
+
+
+async def test_expire_stale_invoices_closes_waiting_and_review_invoices(tmp_path) -> None:
+    engine, session_factory = build_session_factory(tmp_path / "bot.sqlite3")
+    await init_db(engine)
+
+    async with session_factory() as session:
+        user = User(tg_id=123, username="user", full_name="User")
+        session.add(user)
+        await session.flush()
+        session.add_all(
+            [
+                Invoice(
+                    user_id=user.id,
+                    plan_code="starter",
+                    plan_title="Starter",
+                    duration_days=30,
+                    traffic_limit_bytes=10,
+                    amount_rub=Decimal("100.00"),
+                    amount_kopecks=10000,
+                    reference_code="VPN-000001",
+                    status=InvoiceStatus.awaiting_transfer.value,
+                    expires_at=utc_now() - timedelta(minutes=1),
+                ),
+                Invoice(
+                    user_id=user.id,
+                    plan_code="starter",
+                    plan_title="Starter",
+                    duration_days=30,
+                    traffic_limit_bytes=10,
+                    amount_rub=Decimal("100.01"),
+                    amount_kopecks=10001,
+                    reference_code="VPN-000002",
+                    status=InvoiceStatus.pending_review.value,
+                    expires_at=utc_now() - timedelta(minutes=1),
+                ),
+                Invoice(
+                    user_id=user.id,
+                    plan_code="starter",
+                    plan_title="Starter",
+                    duration_days=30,
+                    traffic_limit_bytes=10,
+                    amount_rub=Decimal("100.02"),
+                    amount_kopecks=10002,
+                    reference_code="VPN-000003",
+                    status=InvoiceStatus.awaiting_transfer.value,
+                    expires_at=utc_now() + timedelta(hours=1),
+                ),
+            ]
+        )
+        await session.commit()
+
+        expired_count = await expire_stale_invoices(session)
+        result = await session.execute(select(Invoice.reference_code, Invoice.status))
+        statuses = {reference: status for reference, status in result}
+
+    await engine.dispose()
+
+    assert expired_count == 2
+    assert statuses == {
+        "VPN-000001": InvoiceStatus.expired.value,
+        "VPN-000002": InvoiceStatus.expired.value,
+        "VPN-000003": InvoiceStatus.awaiting_transfer.value,
+    }
