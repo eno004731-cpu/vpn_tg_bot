@@ -101,14 +101,6 @@ jobs:
           fi
 
           if [ -n "${found_services## }" ]; then
-            if systemctl cat "$POLLING_SERVICE_NAME" >/dev/null 2>&1; then
-              if systemctl is-active "$POLLING_SERVICE_NAME" >/dev/null 2>&1; then
-                sudo -n systemctl stop "$POLLING_SERVICE_NAME"
-              fi
-              if systemctl is-enabled "$POLLING_SERVICE_NAME" >/dev/null 2>&1; then
-                sudo -n systemctl disable "$POLLING_SERVICE_NAME"
-              fi
-            fi
             for service in $WEBHOOK_SERVICE_NAMES; do
               sudo -n systemctl restart "$service"
               sudo -n systemctl status "$service" --no-pager
