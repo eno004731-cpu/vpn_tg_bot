@@ -12,10 +12,13 @@ from sqlalchemy import select
 from vpn_bot.config import PlanDefinition
 from vpn_bot.formatters import format_user_subscriptions
 from vpn_bot.keyboards import (
+    CustomPlanAction,
     InvoiceAction,
     PaymentMethodChoice,
     PlanChoice,
     admin_invoice_keyboard,
+    custom_plan_builder_keyboard,
+    format_custom_plan_builder,
     invoice_keyboard,
     main_menu,
     payment_methods_keyboard,
@@ -23,6 +26,14 @@ from vpn_bot.keyboards import (
 )
 from vpn_bot.models import Invoice, InvoiceStatus
 from vpn_bot.runtime import AppContext
+from vpn_bot.services.custom_plans import (
+    CUSTOM_PLAN_KIND,
+    PREMIUM_PLAN_KIND,
+    build_custom_plan,
+    clamp_custom_days,
+    clamp_custom_devices,
+    resolve_plan,
+)
 from vpn_bot.services.jobs import schedule_invoice_provisioning
 from vpn_bot.services.payments import (
     OneTimePlanAlreadyPurchased,
@@ -85,7 +96,7 @@ async def buy_handler(message: Message, app_context: AppContext) -> None:
 
 @router.callback_query(PlanChoice.filter())
 async def plan_selected(callback: CallbackQuery, callback_data: PlanChoice, app_context: AppContext) -> None:
-    plan = app_context.plans.get(callback_data.code)
+    plan = resolve_plan(app_context.plans, callback_data.code)
     if plan is None:
         await callback.answer("Тариф не найден.", show_alert=True)
         return
@@ -98,11 +109,39 @@ async def plan_selected(callback: CallbackQuery, callback_data: PlanChoice, app_
     await callback.answer()
 
 
+@router.callback_query(CustomPlanAction.filter())
+async def custom_plan_selected(
+    callback: CallbackQuery, callback_data: CustomPlanAction, app_context: AppContext
+) -> None:
+    try:
+        kind = _normalize_custom_kind(callback_data.kind)
+        days, devices = _apply_custom_plan_action(
+            callback_data.action,
+            callback_data.days,
+            callback_data.devices,
+        )
+        plan = build_custom_plan(kind, days, devices)
+    except ValueError:
+        await callback.answer("Не удалось собрать тариф.", show_alert=True)
+        return
+
+    if callback_data.action == "pay":
+        await callback.message.answer(_format_plan_payment_choice(plan), reply_markup=payment_methods_keyboard(plan))
+        await callback.answer()
+        return
+
+    await callback.message.edit_text(
+        format_custom_plan_builder(kind, days, devices),
+        reply_markup=custom_plan_builder_keyboard(kind, days, devices),
+    )
+    await callback.answer()
+
+
 @router.callback_query(PaymentMethodChoice.filter(F.method == "transfer"))
 async def transfer_payment_selected(
     callback: CallbackQuery, callback_data: PaymentMethodChoice, app_context: AppContext
 ) -> None:
-    plan = app_context.plans.get(callback_data.code)
+    plan = resolve_plan(app_context.plans, callback_data.code)
     if plan is None or not plan.supports_transfer:
         await callback.answer("Оплата переводом для этого тарифа недоступна.", show_alert=True)
         return
@@ -126,7 +165,7 @@ async def transfer_payment_selected(
 async def stars_payment_selected(
     callback: CallbackQuery, callback_data: PaymentMethodChoice, app_context: AppContext
 ) -> None:
-    plan = app_context.plans.get(callback_data.code)
+    plan = resolve_plan(app_context.plans, callback_data.code)
     if plan is None or not plan.supports_stars or plan.price_stars is None:
         await callback.answer("Оплата Stars для этого тарифа недоступна.", show_alert=True)
         return
@@ -187,7 +226,7 @@ async def stars_pre_checkout(pre_checkout: PreCheckoutQuery, app_context: AppCon
         await pre_checkout.answer(ok=False, error_message="Неизвестный платеж.")
         return
 
-    plan = app_context.plans.get(payload.plan_code)
+    plan = resolve_plan(app_context.plans, payload.plan_code)
     if plan is None or not plan.supports_stars or plan.price_stars is None:
         await pre_checkout.answer(ok=False, error_message="Тариф больше недоступен.")
         return
@@ -223,7 +262,7 @@ async def stars_successful_payment(message: Message, app_context: AppContext) ->
     except ValueError:
         return
 
-    plan = app_context.plans.get(payload.plan_code)
+    plan = resolve_plan(app_context.plans, payload.plan_code)
     if message.from_user is None or plan is None or message.from_user.id != payload.user_tg_id:
         return
 
@@ -442,6 +481,39 @@ def _format_plan_payment_choice(plan: PlanDefinition) -> str:
         lines.extend(["", "Этот пункт только проверяет оплату Stars и не выдаёт VPN-доступ."])
     lines.extend(["", "Выберите способ оплаты:"])
     return "\n".join(lines)
+
+
+def _normalize_custom_kind(kind: str) -> str:
+    if kind not in {CUSTOM_PLAN_KIND, PREMIUM_PLAN_KIND}:
+        raise ValueError("Некорректный тип конструктора.")
+    return kind
+
+
+def _apply_custom_plan_action(action: str, days: int, devices: int) -> tuple[int, int]:
+    days = clamp_custom_days(days)
+    devices = clamp_custom_devices(devices)
+    if action == "show" or action == "pay":
+        return days, devices
+    if action.startswith("p") and action[1:].isdigit():
+        return clamp_custom_days(int(action[1:])), devices
+
+    day_actions = {
+        "dm30": -30,
+        "dm7": -7,
+        "dm1": -1,
+        "dp1": 1,
+        "dp7": 7,
+        "dp30": 30,
+    }
+    device_actions = {
+        "um1": -1,
+        "up1": 1,
+    }
+    if action in day_actions:
+        return clamp_custom_days(days + day_actions[action]), devices
+    if action in device_actions:
+        return days, clamp_custom_devices(devices + device_actions[action])
+    raise ValueError("Некорректное действие конструктора.")
 
 
 async def _notify_admins_about_stars_schedule_error(

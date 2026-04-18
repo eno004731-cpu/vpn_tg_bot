@@ -9,12 +9,20 @@ from vpn_bot.services.nodes import NodeStatus
 from vpn_bot.utils import ensure_utc, format_bytes
 
 
+def format_traffic_limit(limit_bytes: int) -> str:
+    if limit_bytes <= 0:
+        return "Безлимит"
+    return format_bytes(limit_bytes)
+
+
+def format_traffic_usage(used_bytes: int, limit_bytes: int) -> str:
+    return f"{format_bytes(used_bytes)} / {format_traffic_limit(limit_bytes)}"
+
+
 def format_user_subscriptions(subscriptions: Iterable[Subscription], field_encryption_key: Optional[str] = None) -> str:
     parts: list[str] = []
     for subscription in subscriptions:
-        traffic_usage = (
-            f"{format_bytes(subscription.traffic_used_bytes)} / {format_bytes(subscription.traffic_limit_bytes)}"
-        )
+        traffic_usage = format_traffic_usage(subscription.traffic_used_bytes, subscription.traffic_limit_bytes)
         access_url = decrypt_value(subscription.access_url, field_encryption_key) or subscription.access_url
         parts.append(
             "\n".join(
@@ -42,7 +50,7 @@ def format_admin_traffic_report(subscriptions: Iterable[Subscription]) -> str:
             (
                 f"- <code>{item.user.tg_id}</code> {escape(item.user.username or '-')} | "
                 f"{escape(item.plan_title)} | {format_bytes(item.traffic_used_bytes)} / "
-                f"{format_bytes(item.traffic_limit_bytes)} | "
+                f"{format_traffic_limit(item.traffic_limit_bytes)} | "
                 f"до {ensure_utc(item.ends_at).astimezone().strftime('%Y-%m-%d')}"
             )
         )

@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from vpn_bot.config import PaymentSettings, PlanDefinition
 from vpn_bot.models import Invoice, InvoiceStatus, OneTimePlanPurchase, OneTimePlanReservation, User
+from vpn_bot.services.custom_plans import resolve_plan
 from vpn_bot.utils import decimal_to_kopecks, ensure_utc, format_card_number, utc_now
 
 EXPIRABLE_INVOICE_STATUSES = (InvoiceStatus.awaiting_transfer.value,)
@@ -373,10 +374,7 @@ async def purge_stale_one_time_reservations(session: AsyncSession) -> int:
 def _get_plan(plans: Optional[Mapping[str, PlanDefinition]], plan_code: str) -> Optional[PlanDefinition]:
     if plans is None:
         return None
-    get = getattr(plans, "get", None)
-    if get is None:
-        return None
-    return get(plan_code)
+    return resolve_plan(plans, plan_code)
 
 
 def _one_time_error_message() -> str:

@@ -17,6 +17,7 @@ from vpn_bot.formatters import (
     format_admin_nodes_report,
     format_admin_traffic_report,
     format_invoice_rejection,
+    format_traffic_usage,
 )
 from vpn_bot.keyboards import (
     AdminGrantPlan,
@@ -548,7 +549,7 @@ def _format_user_detail(user: User) -> str:
             (
                 f"#{item.id} {escape(item.status)} | {escape(item.plan_title)} | "
                 f"node {escape(item.node_code or '-')} | "
-                f"{format_bytes(item.traffic_used_bytes)} / {format_bytes(item.traffic_limit_bytes)} | "
+                f"{format_traffic_usage(item.traffic_used_bytes, item.traffic_limit_bytes)} | "
                 f"до {ensure_utc(item.ends_at).astimezone().strftime('%Y-%m-%d')}"
             )
         )

@@ -6,6 +6,16 @@ from aiogram.filters.callback_data import CallbackData
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, KeyboardButton, ReplyKeyboardMarkup
 
 from vpn_bot.config import PlanDefinition
+from vpn_bot.services.custom_plans import (
+    CUSTOM_PLAN_DAY_PRESETS,
+    CUSTOM_PLAN_DEFAULT_DAYS,
+    CUSTOM_PLAN_DEFAULT_DEVICES,
+    CUSTOM_PLAN_KIND,
+    PREMIUM_PLAN_KIND,
+    build_custom_plan,
+    clamp_custom_days,
+    clamp_custom_devices,
+)
 
 
 class PlanChoice(CallbackData, prefix="plan"):
@@ -15,6 +25,13 @@ class PlanChoice(CallbackData, prefix="plan"):
 class PaymentMethodChoice(CallbackData, prefix="pay_method"):
     code: str
     method: str
+
+
+class CustomPlanAction(CallbackData, prefix="cp"):
+    kind: str
+    days: int
+    devices: int
+    action: str
 
 
 class InvoiceAction(CallbackData, prefix="invoice"):
@@ -76,13 +93,107 @@ def plans_keyboard(plans: list[PlanDefinition]) -> InlineKeyboardMarkup:
     rows = [
         [
             InlineKeyboardButton(
+                text="Собрать Custom",
+                callback_data=CustomPlanAction(
+                    kind=CUSTOM_PLAN_KIND,
+                    days=CUSTOM_PLAN_DEFAULT_DAYS,
+                    devices=CUSTOM_PLAN_DEFAULT_DEVICES,
+                    action="show",
+                ).pack(),
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                text="Собрать Custom Premium",
+                callback_data=CustomPlanAction(
+                    kind=PREMIUM_PLAN_KIND,
+                    days=CUSTOM_PLAN_DEFAULT_DAYS,
+                    devices=CUSTOM_PLAN_DEFAULT_DEVICES,
+                    action="show",
+                ).pack(),
+            )
+        ],
+    ]
+    rows.extend(
+        [
+            InlineKeyboardButton(
                 text=f"{plan.title} - {plan_price_label(plan)}",
                 callback_data=PlanChoice(code=plan.code).pack(),
             )
         ]
         for plan in plans
-    ]
+    )
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def custom_plan_builder_keyboard(kind: str, days: int, devices: int) -> InlineKeyboardMarkup:
+    days = clamp_custom_days(days)
+    devices = clamp_custom_devices(devices)
+    preset_rows = [
+        CUSTOM_PLAN_DAY_PRESETS[0:4],
+        CUSTOM_PLAN_DAY_PRESETS[4:8],
+        CUSTOM_PLAN_DAY_PRESETS[8:11],
+        CUSTOM_PLAN_DAY_PRESETS[11:13],
+    ]
+    rows = [
+        [
+            InlineKeyboardButton(
+                text=f"{preset} дн",
+                callback_data=CustomPlanAction(kind=kind, days=days, devices=devices, action=f"p{preset}").pack(),
+            )
+            for preset in preset_row
+        ]
+        for preset_row in preset_rows
+    ]
+    rows.extend(
+        [
+            [
+                _custom_plan_button(kind, days, devices, "-30 дн", "dm30"),
+                _custom_plan_button(kind, days, devices, "-7 дн", "dm7"),
+                _custom_plan_button(kind, days, devices, "-1 дн", "dm1"),
+            ],
+            [
+                _custom_plan_button(kind, days, devices, "+1 дн", "dp1"),
+                _custom_plan_button(kind, days, devices, "+7 дн", "dp7"),
+                _custom_plan_button(kind, days, devices, "+30 дн", "dp30"),
+            ],
+            [
+                _custom_plan_button(kind, days, devices, "-1 устройство", "um1"),
+                _custom_plan_button(kind, days, devices, "+1 устройство", "up1"),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="Выбрать этот тариф",
+                    callback_data=CustomPlanAction(kind=kind, days=days, devices=devices, action="pay").pack(),
+                )
+            ],
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def format_custom_plan_builder(kind: str, days: int, devices: int) -> str:
+    plan = build_custom_plan(kind, days, devices)
+    lines = [
+        f"<b>{plan.title}</b>",
+        "",
+        f"Дней: <code>{plan.duration_days}</code>",
+        f"Устройств: <code>{plan.device_limit}</code>",
+        f"Стоимость: <code>{plan.price_rub}</code> ₽ / <code>{plan.price_stars}</code> ⭐",
+    ]
+    if plan.traffic_limit_gb > 0:
+        lines.append(f"Трафик: <code>{plan.traffic_limit_gb}</code> ГБ")
+    else:
+        lines.append("Трафик: <code>Безлимит</code>")
+    lines.extend(["", "Настройте дни и устройства:"])
+    return "\n".join(lines)
+
+
+def _custom_plan_button(kind: str, days: int, devices: int, text: str, action: str) -> InlineKeyboardButton:
+    return InlineKeyboardButton(
+        text=text,
+        callback_data=CustomPlanAction(kind=kind, days=days, devices=devices, action=action).pack(),
+    )
 
 
 def payment_methods_keyboard(plan: PlanDefinition) -> InlineKeyboardMarkup:

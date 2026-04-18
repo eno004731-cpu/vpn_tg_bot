@@ -143,3 +143,27 @@ async def test_daily_policy_uses_plan_limit_override() -> None:
     assert changed is False
     assert subscription.speed_limit_kbytes_per_second == 0
     assert panel.calls == []
+
+
+async def test_daily_policy_skips_unlimited_plan_override() -> None:
+    settings = make_settings()
+    subscription = make_subscription()
+    snapshot = TrafficSnapshot(
+        email=subscription.xui_email,
+        upload_bytes=0,
+        download_bytes=200 * 1024 * 1024 * 1024,
+        total_bytes=200 * 1024 * 1024 * 1024,
+    )
+    panel = FakePanel()
+
+    changed = await _apply_daily_traffic_policy(
+        subscription,
+        snapshot,
+        panel,
+        settings,
+        plan_daily_limit_bytes=0,
+    )
+
+    assert changed is False
+    assert subscription.speed_limit_kbytes_per_second == 0
+    assert panel.calls == []

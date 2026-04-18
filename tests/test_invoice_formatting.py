@@ -2,8 +2,8 @@ from datetime import timedelta
 from decimal import Decimal
 
 from vpn_bot.config import PaymentSettings, XUISettings
-from vpn_bot.formatters import format_admin_help, format_admin_nodes_report
-from vpn_bot.models import Invoice
+from vpn_bot.formatters import format_admin_help, format_admin_nodes_report, format_user_subscriptions
+from vpn_bot.models import Invoice, Subscription
 from vpn_bot.services.nodes import NodeStatus
 from vpn_bot.services.payments import format_invoice_for_user
 from vpn_bot.utils import utc_now
@@ -73,3 +73,27 @@ def test_admin_nodes_report_shows_status_and_errors() -> None:
     assert "active <code>3</code>" in text
     assert "API error" in text
     assert "boom" in text
+
+
+def test_subscription_formatting_shows_unlimited_traffic() -> None:
+    subscription = Subscription(
+        id=1,
+        user_id=1,
+        source_invoice_id=1,
+        plan_code="premium_v1_d30_u1",
+        plan_title="Custom Premium: 30 дней / 1 устройств / Безлимит",
+        status="active",
+        xui_client_id="uuid",
+        xui_email="tg1@vpn.local",
+        access_url="vless://example",
+        traffic_limit_bytes=0,
+        traffic_used_bytes=123,
+        upload_bytes=10,
+        download_bytes=113,
+        started_at=utc_now(),
+        ends_at=utc_now() + timedelta(days=30),
+    )
+
+    text = format_user_subscriptions([subscription])
+
+    assert "Безлимит" in text

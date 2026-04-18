@@ -14,6 +14,7 @@ from sqlalchemy.orm import selectinload
 from vpn_bot.config import PlanDefinition, Settings, TrafficPolicySettings
 from vpn_bot.models import Invoice, InvoiceStatus, Subscription, SubscriptionStatus, User
 from vpn_bot.services.crypto import decrypt_value, encrypt_value
+from vpn_bot.services.custom_plans import resolve_plan
 from vpn_bot.services.nodes import NodeRegistry
 from vpn_bot.services.payments import reserve_one_time_plan_purchase
 from vpn_bot.services.xui import TrafficSnapshot, XUIClient
@@ -52,7 +53,7 @@ def get_subscription_access_url(subscription: Subscription, settings: Settings) 
 def get_plan_device_limit(plan_code: str, plans: Optional[Mapping[str, PlanDefinition]] = None) -> int:
     if plans is None:
         return 2
-    plan = plans.get(plan_code)
+    plan = resolve_plan(plans, plan_code)
     if plan is None:
         return 2
     return max(1, int(plan.device_limit))
@@ -221,10 +222,7 @@ async def sync_active_subscriptions(
     subscriptions_by_node: dict[str, list[Subscription]] = {}
 
     for subscription in subscriptions:
-        if (
-            ensure_utc(subscription.ends_at) <= now
-            or subscription.traffic_used_bytes >= subscription.traffic_limit_bytes
-        ):
+        if ensure_utc(subscription.ends_at) <= now or _traffic_limit_reached(subscription):
             if subscription.status != SubscriptionStatus.expired.value:
                 subscription.status = SubscriptionStatus.expired.value
                 changed = True
@@ -250,10 +248,7 @@ async def sync_active_subscriptions(
             subscription.traffic_used_bytes = snapshot.total_bytes
             subscription.last_synced_at = now
             changed = True
-            if (
-                subscription.traffic_used_bytes >= subscription.traffic_limit_bytes
-                and subscription.status != SubscriptionStatus.expired.value
-            ):
+            if _traffic_limit_reached(subscription) and subscription.status != SubscriptionStatus.expired.value:
                 subscription.status = SubscriptionStatus.expired.value
                 changed = True
                 continue
@@ -286,6 +281,8 @@ async def _apply_daily_traffic_policy(
         return False
 
     changed = _refresh_daily_baseline(subscription, snapshot, policy)
+    if plan_daily_limit_bytes == 0:
+        return changed
     daily_used_bytes = max(snapshot.total_bytes - subscription.daily_baseline_bytes, 0)
     daily_limit_bytes = plan_daily_limit_bytes or policy.daily_limit_bytes
     target_speed_limit = policy.throttled_speed_kbytes_per_second if daily_used_bytes >= daily_limit_bytes else 0
@@ -321,10 +318,14 @@ def _get_plan_daily_limit_bytes(
 ) -> Optional[int]:
     if plans is None:
         return None
-    plan = plans.get(subscription.plan_code)
+    plan = resolve_plan(plans, subscription.plan_code)
     if plan is None:
         return None
     return plan.daily_limit_bytes
+
+
+def _traffic_limit_reached(subscription: Subscription) -> bool:
+    return subscription.traffic_limit_bytes > 0 and subscription.traffic_used_bytes >= subscription.traffic_limit_bytes
 
 
 async def get_user_active_subscriptions(session: AsyncSession, user_id: int) -> list[Subscription]:
@@ -369,11 +370,12 @@ async def get_open_invoices_for_user(session: AsyncSession, user_id: int) -> lis
 def format_subscription_lines(subscriptions: Iterable[Subscription], settings: Optional[Settings] = None) -> str:
     blocks: list[str] = []
     for item in subscriptions:
+        traffic_limit = "Безлимит" if item.traffic_limit_bytes <= 0 else f"{item.traffic_limit_bytes} байт"
         blocks.append(
             "\n".join(
                 [
                     f"<b>{item.plan_title}</b>",
-                    f"Трафик: <code>{item.traffic_used_bytes}</code> / <code>{item.traffic_limit_bytes}</code> байт",
+                    f"Трафик: <code>{item.traffic_used_bytes}</code> / <code>{traffic_limit}</code>",
                     f"До: {ensure_utc(item.ends_at).astimezone().strftime('%Y-%m-%d %H:%M')}",
                     f"Ссылка: <code>{decrypt_subscription_field(item.access_url, settings)}</code>",
                 ]

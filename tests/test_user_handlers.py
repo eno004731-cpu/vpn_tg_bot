@@ -11,10 +11,18 @@ from sqlalchemy import select
 
 from vpn_bot.config import AppSettings, PaymentSettings, PlanDefinition, Settings, TrafficPolicySettings, XUISettings
 from vpn_bot.database import build_session_factory, init_db
-from vpn_bot.handlers.user import invoice_paid, stars_payment_selected, stars_pre_checkout, transfer_payment_selected
-from vpn_bot.keyboards import InvoiceAction, PaymentMethodChoice
+from vpn_bot.handlers.user import (
+    buy_handler,
+    custom_plan_selected,
+    invoice_paid,
+    stars_payment_selected,
+    stars_pre_checkout,
+    transfer_payment_selected,
+)
+from vpn_bot.keyboards import CustomPlanAction, InvoiceAction, PaymentMethodChoice
 from vpn_bot.models import Invoice, InvoiceStatus, User
 from vpn_bot.runtime import AppContext
+from vpn_bot.services.custom_plans import CUSTOM_PLAN_KIND, PREMIUM_PLAN_KIND, build_custom_plan_code
 from vpn_bot.services.nodes import NodeRegistry
 from vpn_bot.utils import utc_now
 
@@ -69,21 +77,26 @@ class FakeBot:
 
 
 class FakeMessage:
-    def __init__(self) -> None:
+    def __init__(self, user_id: int = 123) -> None:
+        self.from_user = TelegramUser(id=user_id, is_bot=False, first_name="User", username="user")
         self.answers = []
+        self.edits = []
 
     async def answer(self, text: str, reply_markup=None) -> None:
         self.answers.append((text, reply_markup))
+
+    async def edit_text(self, text: str, reply_markup=None) -> None:
+        self.edits.append((text, reply_markup))
 
 
 class FakeCallback:
     def __init__(self, *, user_id: int, bot: FakeBot) -> None:
         self.from_user = TelegramUser(id=user_id, is_bot=False, first_name="User", username="user")
         self.bot = bot
-        self.message = FakeMessage()
+        self.message = FakeMessage(user_id=user_id)
         self.answers = []
 
-    async def answer(self, text: str, show_alert: bool = False) -> None:
+    async def answer(self, text: str = "", show_alert: bool = False) -> None:
         self.answers.append((text, show_alert))
 
 
@@ -143,6 +156,142 @@ def make_one_time_transfer_plan() -> PlanDefinition:
         device_limit=1,
         one_time_per_user=True,
     )
+
+
+async def test_buy_handler_shows_custom_builders(tmp_path) -> None:
+    settings = make_settings(admin_ids=(1,))
+    engine, session_factory = build_session_factory(tmp_path / "bot.sqlite3")
+    await init_db(engine)
+    nodes = NodeRegistry.from_settings(settings)
+    plan = PlanDefinition(
+        code="starter",
+        title="Starter",
+        price_rub=Decimal("100.00"),
+        duration_days=30,
+        traffic_limit_gb=310,
+    )
+    context = AppContext(
+        settings=settings,
+        plans={plan.code: plan},
+        engine=engine,
+        session_factory=session_factory,
+        nodes=nodes,
+    )
+    message = FakeMessage(user_id=123)
+
+    try:
+        await buy_handler(message, context)
+    finally:
+        await nodes.close()
+        await engine.dispose()
+
+    assert message.answers
+    markup = message.answers[0][1]
+    button_texts = [button.text for row in markup.inline_keyboard for button in row]
+    assert button_texts[:2] == ["Собрать Custom", "Собрать Custom Premium"]
+    assert "Starter - 100.00 ₽" in button_texts
+
+
+async def test_custom_plan_builder_updates_days_and_devices(tmp_path) -> None:
+    settings = make_settings(admin_ids=(1,))
+    engine, session_factory = build_session_factory(tmp_path / "bot.sqlite3")
+    await init_db(engine)
+    nodes = NodeRegistry.from_settings(settings)
+    context = AppContext(settings=settings, plans={}, engine=engine, session_factory=session_factory, nodes=nodes)
+    callback = FakeCallback(user_id=123, bot=FakeBot())
+
+    try:
+        await custom_plan_selected(
+            callback,
+            CustomPlanAction(kind=CUSTOM_PLAN_KIND, days=30, devices=1, action="up1"),
+            context,
+        )
+    finally:
+        await nodes.close()
+        await engine.dispose()
+
+    assert callback.answers == [("", False)]
+    assert callback.message.answers == []
+    assert callback.message.edits
+    text, markup = callback.message.edits[0]
+    assert "Custom: 30 дней / 2 устройств / 756 ГБ" in text
+    assert "Стоимость: <code>240.00</code> ₽ / <code>240</code> ⭐" in text
+    assert markup is not None
+
+
+async def test_custom_premium_builder_pay_opens_payment_methods(tmp_path) -> None:
+    settings = make_settings(admin_ids=(1,))
+    engine, session_factory = build_session_factory(tmp_path / "bot.sqlite3")
+    await init_db(engine)
+    nodes = NodeRegistry.from_settings(settings)
+    context = AppContext(settings=settings, plans={}, engine=engine, session_factory=session_factory, nodes=nodes)
+    callback = FakeCallback(user_id=123, bot=FakeBot())
+
+    try:
+        await custom_plan_selected(
+            callback,
+            CustomPlanAction(kind=PREMIUM_PLAN_KIND, days=30, devices=2, action="pay"),
+            context,
+        )
+    finally:
+        await nodes.close()
+        await engine.dispose()
+
+    assert callback.answers == [("", False)]
+    text, markup = callback.message.answers[0]
+    assert "Custom Premium: 30 дней / 2 устройств / Безлимит" in text
+    assert markup is not None
+    button_texts = [button.text for row in markup.inline_keyboard for button in row]
+    assert button_texts == ["Перевод на карту / СБП", "Оплатить Stars: 540 ⭐"]
+
+
+async def test_dynamic_custom_transfer_invoice_uses_calculated_plan(tmp_path) -> None:
+    settings = make_settings(admin_ids=(1,))
+    engine, session_factory = build_session_factory(tmp_path / "bot.sqlite3")
+    await init_db(engine)
+    nodes = NodeRegistry.from_settings(settings)
+    context = AppContext(settings=settings, plans={}, engine=engine, session_factory=session_factory, nodes=nodes)
+    callback = FakeCallback(user_id=123, bot=FakeBot())
+    plan_code = build_custom_plan_code(CUSTOM_PLAN_KIND, 30, 2)
+
+    try:
+        await transfer_payment_selected(callback, PaymentMethodChoice(code=plan_code, method="transfer"), context)
+        async with session_factory() as session:
+            invoice = await session.scalar(select(Invoice).where(Invoice.plan_code == plan_code))
+    finally:
+        await nodes.close()
+        await engine.dispose()
+
+    assert invoice is not None
+    assert invoice.plan_title == "Custom: 30 дней / 2 устройств / 756 ГБ"
+    assert invoice.duration_days == 30
+    assert invoice.traffic_limit_bytes == 756 * 1024 * 1024 * 1024
+    assert invoice.amount_rub >= Decimal("240.00")
+    assert callback.answers == [("Инвойс создан", False)]
+
+
+async def test_dynamic_premium_stars_payment_uses_calculated_price(tmp_path) -> None:
+    settings = make_settings(admin_ids=(1,))
+    engine, session_factory = build_session_factory(tmp_path / "bot.sqlite3")
+    await init_db(engine)
+    nodes = NodeRegistry.from_settings(settings)
+    context = AppContext(settings=settings, plans={}, engine=engine, session_factory=session_factory, nodes=nodes)
+    bot = FakeBot()
+    callback = FakeCallback(user_id=123, bot=bot)
+    plan_code = build_custom_plan_code(PREMIUM_PLAN_KIND, 30, 2)
+
+    try:
+        await stars_payment_selected(callback, PaymentMethodChoice(code=plan_code, method="stars"), context)
+    finally:
+        await nodes.close()
+        await engine.dispose()
+
+    assert callback.answers == [("Открыл оплату Stars", False)]
+    assert len(bot.invoices) == 1
+    invoice = bot.invoices[0]
+    assert invoice["title"] == "Custom Premium: 30 дней / 2 устройств / Безлимит"
+    assert invoice["payload"] == f"stars:{plan_code}:123"
+    assert invoice["prices"][0].amount == 540
 
 
 async def test_invoice_paid_does_not_re_notify_paid_invoice(tmp_path) -> None:
