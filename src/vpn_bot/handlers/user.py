@@ -214,8 +214,7 @@ async def stars_pre_checkout(pre_checkout: PreCheckoutQuery, app_context: AppCon
                 reservation is None
                 or reservation.user_id != user.id
                 or reservation.plan_code != plan.code
-                or int(ensure_utc(reservation.created_at).timestamp() * 1_000_000)
-                != payload.reservation_created_at_us
+                or int(ensure_utc(reservation.created_at).timestamp() * 1_000_000) != payload.reservation_created_at_us
             ):
                 await session.commit()
                 await pre_checkout.answer(ok=False, error_message=STALE_STARS_PAYMENT_MESSAGE)
