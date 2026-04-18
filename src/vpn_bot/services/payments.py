@@ -154,8 +154,6 @@ def build_stars_reference(telegram_payment_charge_id: str) -> str:
 
 
 async def user_has_paid_plan(session: AsyncSession, user_id: int, plan_code: str) -> bool:
-    if await _is_admin_user(session, user_id):
-        return False
     invoice_id = await session.scalar(
         select(Invoice.id)
         .where(
@@ -175,8 +173,6 @@ async def reserve_one_time_plan_purchase(
 ) -> None:
     plan = _get_plan(plans, invoice.plan_code)
     if plan is None or not plan.one_time_per_user:
-        return
-    if await _invoice_belongs_to_admin(session, invoice):
         return
 
     existing_purchase = await session.scalar(
@@ -224,8 +220,6 @@ async def reserve_one_time_stars_checkout(
     plan: PlanDefinition,
 ) -> Optional[OneTimePlanReservation]:
     if not plan.one_time_per_user:
-        return None
-    if await _is_admin_user(session, user_id):
         return None
 
     now = utc_now()
@@ -430,17 +424,6 @@ def _get_plan(plans: Optional[Mapping[str, PlanDefinition]], plan_code: str) -> 
     if get is None:
         return None
     return get(plan_code)
-
-
-async def _is_admin_user(session: AsyncSession, user_id: int) -> bool:
-    is_admin = await session.scalar(select(User.is_admin).where(User.id == user_id))
-    return bool(is_admin)
-
-
-async def _invoice_belongs_to_admin(session: AsyncSession, invoice: Invoice) -> bool:
-    if getattr(invoice, "user", None) is not None:
-        return bool(invoice.user.is_admin)
-    return await _is_admin_user(session, invoice.user_id)
 
 
 def _one_time_error_message() -> str:

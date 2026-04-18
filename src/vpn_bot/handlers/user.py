@@ -204,7 +204,7 @@ async def stars_pre_checkout(pre_checkout: PreCheckoutQuery, app_context: AppCon
 
     async with app_context.session_factory() as session:
         user = await ensure_user(session, pre_checkout.from_user, app_context.settings.app.admin_ids)
-        if plan.one_time_per_user and not user.is_admin:
+        if plan.one_time_per_user:
             if payload.reservation_id is None or payload.reservation_created_at_us is None:
                 await session.commit()
                 await pre_checkout.answer(ok=False, error_message=STALE_STARS_PAYMENT_MESSAGE)
