@@ -5,16 +5,20 @@ from sqlalchemy import select
 
 from vpn_bot.config import PaymentSettings, PlanDefinition
 from vpn_bot.database import build_session_factory, init_db
-from vpn_bot.models import Invoice, InvoiceStatus, User
+from vpn_bot.models import Invoice, InvoiceStatus, OneTimePlanReservation, User
 from vpn_bot.services.payments import (
     OneTimePlanAlreadyPurchased,
+    OneTimePlanPaymentAlreadyPending,
     build_stars_payload,
     build_stars_reference,
     create_invoice,
     expire_stale_invoices,
     parse_stars_payload,
+    purge_stale_one_time_reservations,
     reject_invoice,
+    release_one_time_stars_checkout,
     reserve_one_time_plan_purchase,
+    reserve_one_time_stars_checkout,
     reserve_unique_amount,
     user_has_paid_plan,
 )
@@ -328,3 +332,71 @@ async def test_user_has_paid_plan_ignores_rejected_paid_duplicate(tmp_path) -> N
     await engine.dispose()
 
     assert result is False
+
+
+async def test_one_time_stars_checkout_blocks_second_open_window(tmp_path) -> None:
+    engine, session_factory = build_session_factory(tmp_path / "bot.sqlite3")
+    await init_db(engine)
+    plan = PlanDefinition(
+        code="trial",
+        title="Trial",
+        price_rub=Decimal("0.00"),
+        price_stars=1,
+        duration_days=3,
+        traffic_limit_gb=30,
+        one_time_per_user=True,
+    )
+
+    async with session_factory() as session:
+        user = User(tg_id=123, username="user", full_name="User")
+        session.add(user)
+        await session.flush()
+
+        await reserve_one_time_stars_checkout(session, user_id=user.id, plan=plan)
+        try:
+            await reserve_one_time_stars_checkout(session, user_id=user.id, plan=plan)
+        except OneTimePlanPaymentAlreadyPending as exc:
+            message = str(exc)
+        else:
+            message = ""
+
+    await engine.dispose()
+
+    assert message == "Оплата по этому тарифу уже открыта. Завершите текущую оплату или подождите 15 минут."
+
+
+async def test_release_and_purge_stale_one_time_stars_checkout(tmp_path) -> None:
+    engine, session_factory = build_session_factory(tmp_path / "bot.sqlite3")
+    await init_db(engine)
+    plan = PlanDefinition(
+        code="trial",
+        title="Trial",
+        price_rub=Decimal("0.00"),
+        price_stars=1,
+        duration_days=3,
+        traffic_limit_gb=30,
+        one_time_per_user=True,
+    )
+
+    async with session_factory() as session:
+        user = User(tg_id=123, username="user", full_name="User")
+        session.add(user)
+        await session.flush()
+        await reserve_one_time_stars_checkout(session, user_id=user.id, plan=plan)
+        await release_one_time_stars_checkout(session, user_id=user.id, plan_code=plan.code)
+        await session.commit()
+        await reserve_one_time_stars_checkout(session, user_id=user.id, plan=plan)
+        reservation = await session.scalar(select(OneTimePlanReservation))
+        assert reservation is not None
+
+    async with session_factory() as session:
+        reservations = list(await session.scalars(select(OneTimePlanReservation)))
+        reservations[0].expires_at = utc_now() - timedelta(minutes=1)
+        await session.commit()
+        purged = await purge_stale_one_time_reservations(session)
+        remaining = list(await session.scalars(select(OneTimePlanReservation)))
+
+    await engine.dispose()
+
+    assert purged == 1
+    assert remaining == []

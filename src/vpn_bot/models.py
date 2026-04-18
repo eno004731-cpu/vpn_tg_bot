@@ -94,6 +94,17 @@ class OneTimePlanPurchase(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
+class OneTimePlanReservation(Base):
+    __tablename__ = "one_time_plan_reservations"
+    __table_args__ = (UniqueConstraint("user_id", "plan_code", name="uq_one_time_plan_reservation_user_plan"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    plan_code: Mapped[str] = mapped_column(String(64), index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
 class Subscription(Base):
     __tablename__ = "subscriptions"
 

@@ -85,16 +85,27 @@ jobs:
         run: |
           set -euo pipefail
 
-          restarted=0
+          found_services=""
+          missing_services=""
           for service in $WEBHOOK_SERVICE_NAMES; do
-            if systemctl list-unit-files --type=service "$service.service" | grep -q "^$service.service"; then
-              sudo -n systemctl restart "$service"
-              sudo -n systemctl status "$service" --no-pager
-              restarted=1
+            if systemctl cat "$service" >/dev/null 2>&1; then
+              found_services="$found_services $service"
+            else
+              missing_services="$missing_services $service"
             fi
           done
 
-          if [ "$restarted" -eq 0 ]; then
+          if [ -n "${found_services## }" ] && [ -n "${missing_services## }" ]; then
+            echo "::error::Webhook mode is partially installed. Found:${found_services} Missing:${missing_services}"
+            exit 1
+          fi
+
+          if [ -n "${found_services## }" ]; then
+            for service in $WEBHOOK_SERVICE_NAMES; do
+              sudo -n systemctl restart "$service"
+              sudo -n systemctl status "$service" --no-pager
+            done
+          else
             sudo -n systemctl restart "$POLLING_SERVICE_NAME"
             sudo -n systemctl status "$POLLING_SERVICE_NAME" --no-pager
           fi

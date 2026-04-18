@@ -17,7 +17,7 @@ from vpn_bot.metrics import observe_traffic_sync_failure, render_metrics
 from vpn_bot.runtime import AppContext
 from vpn_bot.services.jobs import process_one_job, refresh_job_metrics
 from vpn_bot.services.nodes import NodeRegistry
-from vpn_bot.services.payments import expire_stale_invoices
+from vpn_bot.services.payments import expire_stale_invoices, purge_stale_one_time_reservations
 from vpn_bot.services.subscriptions import sync_active_subscriptions
 
 
@@ -52,6 +52,7 @@ async def run_bot() -> None:
     sync_task = asyncio.create_task(background_sync(context, stop_event))
     jobs_task = asyncio.create_task(background_jobs(context, bot, stop_event))
     try:
+        await disable_telegram_webhook_for_polling(bot)
         await dispatcher.start_polling(bot, app_context=context)
     finally:
         stop_event.set()
@@ -98,6 +99,9 @@ async def background_sync(context: AppContext, stop_event: asyncio.Event) -> Non
                 expired_count = await expire_stale_invoices(session)
                 if expired_count:
                     logging.info("Expired %s stale invoices", expired_count)
+                released_reservations = await purge_stale_one_time_reservations(session)
+                if released_reservations:
+                    logging.info("Released %s stale one-time Stars reservations", released_reservations)
                 await sync_active_subscriptions(session, context.nodes, context.settings, context.plans)
         except Exception:  # noqa: BLE001
             logging.exception("Traffic sync failed")
@@ -153,6 +157,10 @@ async def worker_healthz(request: web.Request) -> web.Response:
 async def worker_metrics(request: web.Request) -> web.Response:
     payload, content_type = render_metrics()
     return web.Response(body=payload, headers={"Content-Type": content_type})
+
+
+async def disable_telegram_webhook_for_polling(bot: Bot) -> None:
+    await bot.delete_webhook(drop_pending_updates=False)
 
 
 def _install_stop_signal_handlers(stop_event: asyncio.Event) -> None:

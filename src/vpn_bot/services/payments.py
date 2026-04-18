@@ -12,7 +12,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from vpn_bot.config import PaymentSettings, PlanDefinition
-from vpn_bot.models import Invoice, InvoiceStatus, OneTimePlanPurchase, User
+from vpn_bot.models import Invoice, InvoiceStatus, OneTimePlanPurchase, OneTimePlanReservation, User
 from vpn_bot.utils import decimal_to_kopecks, ensure_utc, format_card_number, utc_now
 
 EXPIRABLE_INVOICE_STATUSES = (InvoiceStatus.awaiting_transfer.value,)
@@ -43,6 +43,10 @@ class StarsPayload:
 
 
 class OneTimePlanAlreadyPurchased(ValueError):
+    pass
+
+
+class OneTimePlanPaymentAlreadyPending(ValueError):
     pass
 
 
@@ -175,6 +179,70 @@ async def reserve_one_time_plan_purchase(
         raise OneTimePlanAlreadyPurchased(_one_time_error_message()) from exc
 
 
+async def reserve_one_time_stars_checkout(
+    session: AsyncSession,
+    *,
+    user_id: int,
+    plan: PlanDefinition,
+) -> None:
+    if not plan.one_time_per_user:
+        return
+
+    now = utc_now()
+    active_reservation = await session.scalar(
+        select(OneTimePlanReservation).where(
+            OneTimePlanReservation.user_id == user_id,
+            OneTimePlanReservation.plan_code == plan.code,
+        )
+    )
+    if active_reservation is not None:
+        if ensure_utc(active_reservation.expires_at) > now:
+            raise OneTimePlanPaymentAlreadyPending(_one_time_pending_error_message())
+        await session.delete(active_reservation)
+        await session.flush()
+
+    if await user_has_paid_plan(session, user_id, plan.code):
+        raise OneTimePlanAlreadyPurchased(_one_time_error_message())
+
+    try:
+        async with session.begin_nested():
+            session.add(
+                OneTimePlanReservation(
+                    user_id=user_id,
+                    plan_code=plan.code,
+                    expires_at=now + timedelta(minutes=15),
+                )
+            )
+            await session.flush()
+    except IntegrityError as exc:
+        existing = await session.scalar(
+            select(OneTimePlanReservation).where(
+                OneTimePlanReservation.user_id == user_id,
+                OneTimePlanReservation.plan_code == plan.code,
+            )
+        )
+        if existing is not None and ensure_utc(existing.expires_at) > now:
+            raise OneTimePlanPaymentAlreadyPending(_one_time_pending_error_message()) from exc
+        raise
+
+
+async def release_one_time_stars_checkout(
+    session: AsyncSession,
+    *,
+    user_id: int,
+    plan_code: str,
+) -> None:
+    reservation = await session.scalar(
+        select(OneTimePlanReservation).where(
+            OneTimePlanReservation.user_id == user_id,
+            OneTimePlanReservation.plan_code == plan_code,
+        )
+    )
+    if reservation is not None:
+        await session.delete(reservation)
+        await session.flush()
+
+
 async def create_stars_invoice_record(
     session: AsyncSession,
     user: User,
@@ -290,6 +358,18 @@ async def expire_stale_invoices(session: AsyncSession) -> int:
     return len(invoices)
 
 
+async def purge_stale_one_time_reservations(session: AsyncSession) -> int:
+    now = utc_now()
+    reservations = list(
+        await session.scalars(select(OneTimePlanReservation).where(OneTimePlanReservation.expires_at <= now))
+    )
+    for reservation in reservations:
+        await session.delete(reservation)
+    if reservations:
+        await session.commit()
+    return len(reservations)
+
+
 def _get_plan(plans: Optional[Mapping[str, PlanDefinition]], plan_code: str) -> Optional[PlanDefinition]:
     if plans is None:
         return None
@@ -301,3 +381,7 @@ def _get_plan(plans: Optional[Mapping[str, PlanDefinition]], plan_code: str) -> 
 
 def _one_time_error_message() -> str:
     return "Этот тариф можно купить только один раз."
+
+
+def _one_time_pending_error_message() -> str:
+    return "Оплата по этому тарифу уже открыта. Завершите текущую оплату или подождите 15 минут."

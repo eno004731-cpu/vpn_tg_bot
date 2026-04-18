@@ -51,8 +51,9 @@ def make_settings(*, admin_ids: tuple[int, ...]) -> Settings:
 
 
 class FakeBot:
-    def __init__(self, *, fail_chat_ids: tuple[int, ...] = ()) -> None:
+    def __init__(self, *, fail_chat_ids: tuple[int, ...] = (), fail_invoice_send: bool = False) -> None:
         self.fail_chat_ids = set(fail_chat_ids)
+        self.fail_invoice_send = fail_invoice_send
         self.messages = []
         self.invoices = []
 
@@ -62,6 +63,8 @@ class FakeBot:
         self.messages.append((chat_id, text, reply_markup))
 
     async def send_invoice(self, **kwargs) -> None:
+        if self.fail_invoice_send:
+            raise TelegramAPIError(SimpleNamespace(__api_method__="sendInvoice"), "boom")
         self.invoices.append(kwargs)
 
 
@@ -256,6 +259,67 @@ async def test_stars_payment_selected_blocks_second_trial_purchase(tmp_path) -> 
 
     assert bot.invoices == []
     assert callback.answers == [("Этот тариф можно купить только один раз.", True)]
+
+
+async def test_stars_payment_selected_blocks_second_parallel_open_payment(tmp_path) -> None:
+    settings = make_settings(admin_ids=(1,))
+    engine, session_factory = build_session_factory(tmp_path / "bot.sqlite3")
+    await init_db(engine)
+    nodes = NodeRegistry.from_settings(settings)
+    plan = make_trial_plan()
+    context = AppContext(
+        settings=settings,
+        plans={plan.code: plan},
+        engine=engine,
+        session_factory=session_factory,
+        nodes=nodes,
+    )
+    bot = FakeBot()
+    first_callback = FakeCallback(user_id=123, bot=bot)
+    second_callback = FakeCallback(user_id=123, bot=bot)
+
+    try:
+        await stars_payment_selected(first_callback, PaymentMethodChoice(code=plan.code, method="stars"), context)
+        await stars_payment_selected(second_callback, PaymentMethodChoice(code=plan.code, method="stars"), context)
+    finally:
+        await nodes.close()
+        await engine.dispose()
+
+    assert len(bot.invoices) == 1
+    assert first_callback.answers == [("Открыл оплату Stars", False)]
+    assert second_callback.answers == [
+        ("Оплата по этому тарифу уже открыта. Завершите текущую оплату или подождите 15 минут.", True)
+    ]
+
+
+async def test_stars_payment_selected_releases_reservation_when_send_invoice_fails(tmp_path) -> None:
+    settings = make_settings(admin_ids=(1,))
+    engine, session_factory = build_session_factory(tmp_path / "bot.sqlite3")
+    await init_db(engine)
+    nodes = NodeRegistry.from_settings(settings)
+    plan = make_trial_plan()
+    failing_bot = FakeBot(fail_invoice_send=True)
+    retry_bot = FakeBot()
+    failing_callback = FakeCallback(user_id=123, bot=failing_bot)
+    retry_callback = FakeCallback(user_id=123, bot=retry_bot)
+    context = AppContext(
+        settings=settings,
+        plans={plan.code: plan},
+        engine=engine,
+        session_factory=session_factory,
+        nodes=nodes,
+    )
+
+    try:
+        await stars_payment_selected(failing_callback, PaymentMethodChoice(code=plan.code, method="stars"), context)
+        await stars_payment_selected(retry_callback, PaymentMethodChoice(code=plan.code, method="stars"), context)
+    finally:
+        await nodes.close()
+        await engine.dispose()
+
+    assert failing_callback.answers == [("Не удалось открыть оплату Stars. Попробуйте ещё раз.", True)]
+    assert retry_callback.answers == [("Открыл оплату Stars", False)]
+    assert len(retry_bot.invoices) == 1
 
 
 async def test_transfer_payment_selected_blocks_second_one_time_purchase(tmp_path) -> None:

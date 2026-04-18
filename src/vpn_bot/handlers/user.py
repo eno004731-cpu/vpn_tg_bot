@@ -26,6 +26,7 @@ from vpn_bot.runtime import AppContext
 from vpn_bot.services.jobs import schedule_invoice_provisioning
 from vpn_bot.services.payments import (
     OneTimePlanAlreadyPurchased,
+    OneTimePlanPaymentAlreadyPending,
     build_stars_payload,
     build_stars_reference,
     create_invoice,
@@ -35,7 +36,9 @@ from vpn_bot.services.payments import (
     format_invoice_for_user,
     mark_invoice_pending_review,
     parse_stars_payload,
+    release_one_time_stars_checkout,
     reserve_one_time_plan_purchase,
+    reserve_one_time_stars_checkout,
     user_has_paid_plan,
 )
 from vpn_bot.services.subscriptions import (
@@ -132,30 +135,47 @@ async def stars_payment_selected(
         return
 
     async with app_context.session_factory() as session:
-        if await _user_already_bought_plan(
-            session,
-            callback.from_user,
-            app_context.settings.app.admin_ids,
-            plan,
-        ):
-            await session.commit()
-            await callback.answer(_one_time_plan_error(), show_alert=True)
-            return
+        user = await ensure_user(session, callback.from_user, app_context.settings.app.admin_ids)
+        if plan.one_time_per_user:
+            try:
+                await reserve_one_time_stars_checkout(
+                    session,
+                    user_id=user.id,
+                    plan=plan,
+                )
+            except OneTimePlanAlreadyPurchased:
+                await session.commit()
+                await callback.answer(_one_time_plan_error(), show_alert=True)
+                return
+            except OneTimePlanPaymentAlreadyPending as exc:
+                await session.commit()
+                await callback.answer(str(exc), show_alert=True)
+                return
         await session.commit()
 
     description = plan.description or plan.title
     if not plan.provision_access:
         description = "Тестовая оплата Telegram Stars. VPN-доступ не выдаётся."
 
-    await callback.bot.send_invoice(
-        chat_id=callback.from_user.id,
-        title=plan.title,
-        description=description,
-        payload=build_stars_payload(plan.code, callback.from_user.id),
-        provider_token="",
-        currency="XTR",
-        prices=[LabeledPrice(label=plan.title, amount=plan.price_stars)],
-    )
+    try:
+        await callback.bot.send_invoice(
+            chat_id=callback.from_user.id,
+            title=plan.title,
+            description=description,
+            payload=build_stars_payload(plan.code, callback.from_user.id),
+            provider_token="",
+            currency="XTR",
+            prices=[LabeledPrice(label=plan.title, amount=plan.price_stars)],
+        )
+    except TelegramAPIError:
+        logging.exception("Failed to open Stars invoice for user %s and plan %s", callback.from_user.id, plan.code)
+        if plan.one_time_per_user:
+            async with app_context.session_factory() as session:
+                user = await ensure_user(session, callback.from_user, app_context.settings.app.admin_ids)
+                await release_one_time_stars_checkout(session, user_id=user.id, plan_code=plan.code)
+                await session.commit()
+        await callback.answer("Не удалось открыть оплату Stars. Попробуйте ещё раз.", show_alert=True)
+        return
     await callback.answer("Открыл оплату Stars")
 
 
@@ -245,6 +265,11 @@ async def stars_successful_payment(message: Message, app_context: AppContext) ->
                     "Администратор уже видит ситуацию и поможет вручную."
                 )
                 return
+        await release_one_time_stars_checkout(
+            session,
+            user_id=user.id,
+            plan_code=plan.code,
+        )
         if invoice.status == InvoiceStatus.rejected.value:
             await session.commit()
             await message.answer(
