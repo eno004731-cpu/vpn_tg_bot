@@ -7,7 +7,7 @@ from decimal import Decimal
 from html import escape
 from typing import Optional
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from vpn_bot.config import PaymentSettings, PlanDefinition
@@ -66,8 +66,14 @@ async def create_invoice(
     used_kopecks = set(
         await session.scalars(
             select(Invoice.amount_kopecks).where(
-                Invoice.status.in_(OPEN_INVOICE_STATUSES),
                 Invoice.id != invoice.id,
+                or_(
+                    and_(
+                        Invoice.status == InvoiceStatus.awaiting_transfer.value,
+                        Invoice.expires_at > now,
+                    ),
+                    Invoice.status == InvoiceStatus.pending_review.value,
+                ),
             )
         )
     )
@@ -96,6 +102,19 @@ def parse_stars_payload(payload: str) -> StarsPayload:
 def build_stars_reference(telegram_payment_charge_id: str) -> str:
     digest = hashlib.sha256(telegram_payment_charge_id.encode()).hexdigest()[:24]
     return f"XTR-{digest}"
+
+
+async def user_has_paid_plan(session: AsyncSession, user_id: int, plan_code: str) -> bool:
+    invoice_id = await session.scalar(
+        select(Invoice.id)
+        .where(
+            Invoice.user_id == user_id,
+            Invoice.plan_code == plan_code,
+            Invoice.paid_at.is_not(None),
+        )
+        .limit(1)
+    )
+    return invoice_id is not None
 
 
 async def create_stars_invoice_record(

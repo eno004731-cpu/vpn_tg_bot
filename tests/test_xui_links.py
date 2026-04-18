@@ -151,6 +151,7 @@ async def test_add_client_uses_modern_api_and_serializes_settings() -> None:
         flow="xtls-rprx-vision",
         telegram_user_id=123,
         comment="test",
+        limit_ip=1,
     )
 
     assert len(requests) == 1
@@ -162,6 +163,7 @@ async def test_add_client_uses_modern_api_and_serializes_settings() -> None:
     assert settings["clients"][0]["id"] == "uuid-1"
     assert settings["clients"][0]["flow"] == "xtls-rprx-vision"
     assert settings["clients"][0]["email"] == "tg1@vpn.local"
+    assert settings["clients"][0]["limitIp"] == 1
     assert settings["clients"][0]["speedLimit"] == 0
 
     await client.close()

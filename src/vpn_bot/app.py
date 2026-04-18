@@ -104,7 +104,13 @@ async def background_jobs(context: AppContext, bot: Bot, stop_event: asyncio.Eve
             processed = 0
             while processed < 20 and not stop_event.is_set():
                 async with context.session_factory() as session:
-                    did_work = await process_one_job(session, context.settings, context.nodes, bot)
+                    did_work = await process_one_job(
+                        session,
+                        context.settings,
+                        context.nodes,
+                        bot,
+                        context.plans,
+                    )
                     await refresh_job_metrics(session)
                 if not did_work:
                     break

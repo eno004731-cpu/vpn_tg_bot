@@ -7,7 +7,7 @@ from typing import Iterable, Mapping, Optional
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -48,8 +48,21 @@ def get_subscription_access_url(subscription: Subscription, settings: Settings) 
     return decrypt_subscription_field(subscription.access_url, settings)
 
 
+def get_plan_device_limit(plan_code: str, plans: Optional[Mapping[str, PlanDefinition]] = None) -> int:
+    if plans is None:
+        return 2
+    plan = plans.get(plan_code)
+    if plan is None:
+        return 2
+    return max(1, int(plan.device_limit))
+
+
 async def activate_invoice(
-    session: AsyncSession, settings: Settings, nodes: NodeRegistry, invoice_id: int
+    session: AsyncSession,
+    settings: Settings,
+    nodes: NodeRegistry,
+    invoice_id: int,
+    plans: Optional[Mapping[str, PlanDefinition]] = None,
 ) -> ActivationResult:
     invoice = await session.scalar(select(Invoice).options(selectinload(Invoice.user)).where(Invoice.id == invoice_id))
     if invoice is None:
@@ -80,6 +93,7 @@ async def activate_invoice(
         flow=node.flow,
         telegram_user_id=invoice.user.tg_id,
         comment=invoice.plan_title,
+        limit_ip=get_plan_device_limit(invoice.plan_code, plans),
     )
     subscription = Subscription(
         user_id=invoice.user_id,
@@ -115,6 +129,7 @@ async def provision_subscription_for_user(
     duration_days: int,
     traffic_limit_bytes: int,
     source_invoice_id: Optional[int] = None,
+    device_limit: int = 2,
 ) -> Subscription:
     now = utc_now()
     node = await nodes.select_node_for_new_subscription(session)
@@ -131,6 +146,7 @@ async def provision_subscription_for_user(
         flow=node.flow,
         telegram_user_id=user.tg_id,
         comment=plan_title,
+        limit_ip=max(1, int(device_limit)),
     )
     subscription = Subscription(
         user_id=user.id,
@@ -322,18 +338,24 @@ async def get_user_active_subscriptions(session: AsyncSession, user_id: int) -> 
 
 
 async def get_open_invoices_for_user(session: AsyncSession, user_id: int) -> list[Invoice]:
+    now = utc_now()
     return list(
         await session.scalars(
             select(Invoice)
             .where(
                 Invoice.user_id == user_id,
-                Invoice.status.in_(
-                    [
-                        InvoiceStatus.awaiting_transfer.value,
-                        InvoiceStatus.pending_review.value,
-                        InvoiceStatus.paid_pending_provision.value,
-                        InvoiceStatus.provision_failed.value,
-                    ]
+                or_(
+                    and_(
+                        Invoice.status == InvoiceStatus.awaiting_transfer.value,
+                        Invoice.expires_at > now,
+                    ),
+                    Invoice.status.in_(
+                        [
+                            InvoiceStatus.pending_review.value,
+                            InvoiceStatus.paid_pending_provision.value,
+                            InvoiceStatus.provision_failed.value,
+                        ]
+                    ),
                 ),
             )
             .order_by(Invoice.created_at.desc())
