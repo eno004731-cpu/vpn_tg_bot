@@ -20,7 +20,8 @@ jobs:
 
     env:
       APP_DIR: /opt/vpn-bot
-      SERVICE_NAME: vpn-bot
+      POLLING_SERVICE_NAME: vpn-bot
+      WEBHOOK_SERVICE_NAMES: vpn-bot-web vpn-bot-worker
 
     steps:
       - name: Checkout for checks
@@ -80,11 +81,23 @@ jobs:
           .venv/bin/python -m pip install -e .
           .venv/bin/python -m vpn_bot init-db
 
-      - name: Restart bot service
+      - name: Restart bot services
         run: |
           set -euo pipefail
-          sudo -n systemctl restart "$SERVICE_NAME"
-          sudo -n systemctl status "$SERVICE_NAME" --no-pager
+
+          restarted=0
+          for service in $WEBHOOK_SERVICE_NAMES; do
+            if systemctl list-unit-files --type=service "$service.service" | grep -q "^$service.service"; then
+              sudo -n systemctl restart "$service"
+              sudo -n systemctl status "$service" --no-pager
+              restarted=1
+            fi
+          done
+
+          if [ "$restarted" -eq 0 ]; then
+            sudo -n systemctl restart "$POLLING_SERVICE_NAME"
+            sudo -n systemctl status "$POLLING_SERVICE_NAME" --no-pager
+          fi
 
       - name: Deployment summary
         run: |
@@ -93,5 +106,6 @@ jobs:
             echo ""
             echo "- Commit: \`$GITHUB_SHA\`"
             echo "- App dir: \`$APP_DIR\`"
-            echo "- Service: \`$SERVICE_NAME\`"
+            echo "- Webhook services: \`$WEBHOOK_SERVICE_NAMES\`"
+            echo "- Polling fallback service: \`$POLLING_SERVICE_NAME\`"
           } >> "$GITHUB_STEP_SUMMARY"

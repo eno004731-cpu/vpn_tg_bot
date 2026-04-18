@@ -28,4 +28,6 @@ secrets/*
 *.mobileconfig
 
 *.log
+
+# Local CLI binaries downloaded during server/k8s setup.
 kubectl
