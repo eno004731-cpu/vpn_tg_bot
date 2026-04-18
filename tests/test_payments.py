@@ -315,6 +315,55 @@ async def test_one_time_plan_purchase_reservation_blocks_second_invoice(tmp_path
     assert message == "Этот тариф можно купить только один раз."
 
 
+async def test_one_time_plan_purchase_reservation_allows_admin_invoice(tmp_path) -> None:
+    engine, session_factory = build_session_factory(tmp_path / "bot.sqlite3")
+    await init_db(engine)
+    plan = PlanDefinition(
+        code="trial",
+        title="Trial",
+        price_rub=Decimal("100.00"),
+        duration_days=3,
+        traffic_limit_gb=30,
+        one_time_per_user=True,
+    )
+
+    async with session_factory() as session:
+        user = User(tg_id=123, username="admin", full_name="Admin", is_admin=True)
+        session.add(user)
+        await session.flush()
+        first = Invoice(
+            user_id=user.id,
+            plan_code=plan.code,
+            plan_title=plan.title,
+            duration_days=plan.duration_days,
+            traffic_limit_bytes=plan.traffic_limit_bytes,
+            amount_rub=Decimal("100.00"),
+            amount_kopecks=10000,
+            reference_code="VPN-000001",
+            status=InvoiceStatus.pending_review.value,
+            expires_at=utc_now() + timedelta(hours=1),
+        )
+        second = Invoice(
+            user_id=user.id,
+            plan_code=plan.code,
+            plan_title=plan.title,
+            duration_days=plan.duration_days,
+            traffic_limit_bytes=plan.traffic_limit_bytes,
+            amount_rub=Decimal("100.01"),
+            amount_kopecks=10001,
+            reference_code="VPN-000002",
+            status=InvoiceStatus.pending_review.value,
+            expires_at=utc_now() + timedelta(hours=1),
+        )
+        session.add_all([first, second])
+        await session.flush()
+
+        await reserve_one_time_plan_purchase(session, first, {plan.code: plan})
+        await reserve_one_time_plan_purchase(session, second, {plan.code: plan})
+
+    await engine.dispose()
+
+
 async def test_user_has_paid_plan_ignores_rejected_paid_duplicate(tmp_path) -> None:
     engine, session_factory = build_session_factory(tmp_path / "bot.sqlite3")
     await init_db(engine)
