@@ -197,3 +197,22 @@ def reject_invoice(invoice: Invoice, note: Optional[str] = None) -> None:
 def expire_open_invoice(invoice: Invoice) -> None:
     if invoice.status in OPEN_INVOICE_STATUSES:
         invoice.status = InvoiceStatus.expired.value
+
+
+async def expire_stale_invoices(session: AsyncSession) -> int:
+    now = utc_now()
+    invoices = list(
+        await session.scalars(
+            select(Invoice).where(
+                Invoice.status.in_(OPEN_INVOICE_STATUSES),
+                Invoice.expires_at <= now,
+            )
+        )
+    )
+    for invoice in invoices:
+        expire_open_invoice(invoice)
+        if not invoice.admin_note:
+            invoice.admin_note = "Автоматически закрыт по истечении времени ожидания оплаты."
+    if invoices:
+        await session.commit()
+    return len(invoices)
