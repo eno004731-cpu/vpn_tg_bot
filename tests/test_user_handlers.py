@@ -219,6 +219,75 @@ async def test_custom_plan_builder_updates_days_and_devices(tmp_path) -> None:
     assert markup is not None
 
 
+async def test_custom_plan_builder_ignores_noop_day_increase_at_max(tmp_path) -> None:
+    settings = make_settings(admin_ids=(1,))
+    engine, session_factory = build_session_factory(tmp_path / "bot.sqlite3")
+    await init_db(engine)
+    nodes = NodeRegistry.from_settings(settings)
+    context = AppContext(settings=settings, plans={}, engine=engine, session_factory=session_factory, nodes=nodes)
+    callback = FakeCallback(user_id=123, bot=FakeBot())
+
+    try:
+        await custom_plan_selected(
+            callback,
+            CustomPlanAction(kind=CUSTOM_PLAN_KIND, days=365, devices=1, action="dp1"),
+            context,
+        )
+    finally:
+        await nodes.close()
+        await engine.dispose()
+
+    assert callback.answers == [("Уже максимум: 365 дней.", False)]
+    assert callback.message.edits == []
+    assert callback.message.answers == []
+
+
+async def test_custom_plan_builder_ignores_noop_day_decrease_at_min(tmp_path) -> None:
+    settings = make_settings(admin_ids=(1,))
+    engine, session_factory = build_session_factory(tmp_path / "bot.sqlite3")
+    await init_db(engine)
+    nodes = NodeRegistry.from_settings(settings)
+    context = AppContext(settings=settings, plans={}, engine=engine, session_factory=session_factory, nodes=nodes)
+    callback = FakeCallback(user_id=123, bot=FakeBot())
+
+    try:
+        await custom_plan_selected(
+            callback,
+            CustomPlanAction(kind=CUSTOM_PLAN_KIND, days=1, devices=1, action="dm1"),
+            context,
+        )
+    finally:
+        await nodes.close()
+        await engine.dispose()
+
+    assert callback.answers == [("Уже минимум: 1 день.", False)]
+    assert callback.message.edits == []
+    assert callback.message.answers == []
+
+
+async def test_custom_plan_builder_ignores_noop_device_increase_at_max(tmp_path) -> None:
+    settings = make_settings(admin_ids=(1,))
+    engine, session_factory = build_session_factory(tmp_path / "bot.sqlite3")
+    await init_db(engine)
+    nodes = NodeRegistry.from_settings(settings)
+    context = AppContext(settings=settings, plans={}, engine=engine, session_factory=session_factory, nodes=nodes)
+    callback = FakeCallback(user_id=123, bot=FakeBot())
+
+    try:
+        await custom_plan_selected(
+            callback,
+            CustomPlanAction(kind=PREMIUM_PLAN_KIND, days=30, devices=10, action="up1"),
+            context,
+        )
+    finally:
+        await nodes.close()
+        await engine.dispose()
+
+    assert callback.answers == [("Уже максимум: 10 устройств.", False)]
+    assert callback.message.edits == []
+    assert callback.message.answers == []
+
+
 async def test_custom_premium_builder_pay_opens_payment_methods(tmp_path) -> None:
     settings = make_settings(admin_ids=(1,))
     engine, session_factory = build_session_factory(tmp_path / "bot.sqlite3")

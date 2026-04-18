@@ -4,7 +4,7 @@ import logging
 from html import escape
 
 from aiogram import F, Router
-from aiogram.exceptions import TelegramAPIError
+from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 from aiogram.filters import Command, CommandStart
 from aiogram.types import CallbackQuery, LabeledPrice, Message, PreCheckoutQuery
 from sqlalchemy import select
@@ -62,6 +62,13 @@ from vpn_bot.utils import ensure_utc, utc_now
 router = Router(name="user")
 
 
+async def _answer_callback(callback: CallbackQuery, text: str = "", *, show_alert: bool = False) -> None:
+    try:
+        await callback.answer(text, show_alert=show_alert)
+    except TelegramBadRequest:
+        logging.debug("Skipped callback answer because Telegram no longer accepts this query", exc_info=True)
+
+
 def _one_time_plan_error() -> str:
     return "Этот тариф можно купить только один раз."
 
@@ -98,15 +105,15 @@ async def buy_handler(message: Message, app_context: AppContext) -> None:
 async def plan_selected(callback: CallbackQuery, callback_data: PlanChoice, app_context: AppContext) -> None:
     plan = resolve_plan(app_context.plans, callback_data.code)
     if plan is None:
-        await callback.answer("Тариф не найден.", show_alert=True)
+        await _answer_callback(callback, "Тариф не найден.", show_alert=True)
         return
 
     if not plan.supports_transfer and not plan.supports_stars:
-        await callback.answer("У тарифа нет доступных способов оплаты.", show_alert=True)
+        await _answer_callback(callback, "У тарифа нет доступных способов оплаты.", show_alert=True)
         return
 
     await callback.message.answer(_format_plan_payment_choice(plan), reply_markup=payment_methods_keyboard(plan))
-    await callback.answer()
+    await _answer_callback(callback)
 
 
 @router.callback_query(CustomPlanAction.filter())
@@ -115,6 +122,8 @@ async def custom_plan_selected(
 ) -> None:
     try:
         kind = _normalize_custom_kind(callback_data.kind)
+        current_days = clamp_custom_days(callback_data.days)
+        current_devices = clamp_custom_devices(callback_data.devices)
         days, devices = _apply_custom_plan_action(
             callback_data.action,
             callback_data.days,
@@ -122,19 +131,29 @@ async def custom_plan_selected(
         )
         plan = build_custom_plan(kind, days, devices)
     except ValueError:
-        await callback.answer("Не удалось собрать тариф.", show_alert=True)
+        await _answer_callback(callback, "Не удалось собрать тариф.", show_alert=True)
         return
 
     if callback_data.action == "pay":
         await callback.message.answer(_format_plan_payment_choice(plan), reply_markup=payment_methods_keyboard(plan))
-        await callback.answer()
+        await _answer_callback(callback)
         return
 
-    await callback.message.edit_text(
-        format_custom_plan_builder(kind, days, devices),
-        reply_markup=custom_plan_builder_keyboard(kind, days, devices),
-    )
-    await callback.answer()
+    if callback_data.action != "show" and (days, devices) == (current_days, current_devices):
+        await _answer_callback(callback, _custom_plan_noop_message(callback_data.action, days, devices))
+        return
+
+    try:
+        await callback.message.edit_text(
+            format_custom_plan_builder(kind, days, devices),
+            reply_markup=custom_plan_builder_keyboard(kind, days, devices),
+        )
+    except TelegramBadRequest as exc:
+        if _is_message_not_modified(exc):
+            await _answer_callback(callback)
+            return
+        raise
+    await _answer_callback(callback)
 
 
 @router.callback_query(PaymentMethodChoice.filter(F.method == "transfer"))
@@ -143,14 +162,14 @@ async def transfer_payment_selected(
 ) -> None:
     plan = resolve_plan(app_context.plans, callback_data.code)
     if plan is None or not plan.supports_transfer:
-        await callback.answer("Оплата переводом для этого тарифа недоступна.", show_alert=True)
+        await _answer_callback(callback, "Оплата переводом для этого тарифа недоступна.", show_alert=True)
         return
 
     async with app_context.session_factory() as session:
         user = await ensure_user(session, callback.from_user, app_context.settings.app.admin_ids)
         if plan.one_time_per_user and await user_has_paid_plan(session, user.id, plan.code):
             await session.commit()
-            await callback.answer(_one_time_plan_error(), show_alert=True)
+            await _answer_callback(callback, _one_time_plan_error(), show_alert=True)
             return
         invoice = await create_invoice(session, user, plan, app_context.settings.payment)
 
@@ -158,7 +177,7 @@ async def transfer_payment_selected(
         format_invoice_for_user(invoice, app_context.settings.payment),
         reply_markup=invoice_keyboard(invoice.id),
     )
-    await callback.answer("Инвойс создан")
+    await _answer_callback(callback, "Инвойс создан")
 
 
 @router.callback_query(PaymentMethodChoice.filter(F.method == "stars"))
@@ -167,10 +186,10 @@ async def stars_payment_selected(
 ) -> None:
     plan = resolve_plan(app_context.plans, callback_data.code)
     if plan is None or not plan.supports_stars or plan.price_stars is None:
-        await callback.answer("Оплата Stars для этого тарифа недоступна.", show_alert=True)
+        await _answer_callback(callback, "Оплата Stars для этого тарифа недоступна.", show_alert=True)
         return
     if callback.from_user is None:
-        await callback.answer("Не удалось определить пользователя.", show_alert=True)
+        await _answer_callback(callback, "Не удалось определить пользователя.", show_alert=True)
         return
 
     async with app_context.session_factory() as session:
@@ -184,11 +203,11 @@ async def stars_payment_selected(
                 )
             except OneTimePlanAlreadyPurchased:
                 await session.commit()
-                await callback.answer(_one_time_plan_error(), show_alert=True)
+                await _answer_callback(callback, _one_time_plan_error(), show_alert=True)
                 return
             except OneTimePlanPaymentAlreadyPending as exc:
                 await session.commit()
-                await callback.answer(str(exc), show_alert=True)
+                await _answer_callback(callback, str(exc), show_alert=True)
                 return
         await session.commit()
 
@@ -213,9 +232,9 @@ async def stars_payment_selected(
                 user = await ensure_user(session, callback.from_user, app_context.settings.app.admin_ids)
                 await release_one_time_stars_checkout(session, user_id=user.id, plan_code=plan.code)
                 await session.commit()
-        await callback.answer("Не удалось открыть оплату Stars. Попробуйте ещё раз.", show_alert=True)
+        await _answer_callback(callback, "Не удалось открыть оплату Stars. Попробуйте ещё раз.", show_alert=True)
         return
-    await callback.answer("Открыл оплату Stars")
+    await _answer_callback(callback, "Открыл оплату Stars")
 
 
 @router.pre_checkout_query()
@@ -359,41 +378,42 @@ async def invoice_paid(callback: CallbackQuery, callback_data: InvoiceAction, ap
     async with app_context.session_factory() as session:
         invoice = await session.scalar(select(Invoice).where(Invoice.id == callback_data.invoice_id))
         if invoice is None or callback.from_user is None:
-            await callback.answer("Инвойс не найден.", show_alert=True)
+            await _answer_callback(callback, "Инвойс не найден.", show_alert=True)
             return
         user = await ensure_user(session, callback.from_user, app_context.settings.app.admin_ids)
         if invoice.user_id != user.id:
-            await callback.answer("Это не ваш инвойс.", show_alert=True)
+            await _answer_callback(callback, "Это не ваш инвойс.", show_alert=True)
             return
         if invoice.status == InvoiceStatus.pending_review.value:
-            await callback.answer("Платёж уже отправлен админу на проверку.")
+            await _answer_callback(callback, "Платёж уже отправлен админу на проверку.")
             return
         if invoice.status == InvoiceStatus.paid_pending_provision.value:
-            await callback.answer("Оплата уже подтверждена. Доступ активируется автоматически.")
+            await _answer_callback(callback, "Оплата уже подтверждена. Доступ активируется автоматически.")
             return
         if invoice.status == InvoiceStatus.provision_failed.value:
-            await callback.answer(
+            await _answer_callback(
+                callback,
                 "Оплата уже подтверждена, но автоматическая выдача пока не удалась. Администратор уже видит ошибку.",
                 show_alert=True,
             )
             return
         if invoice.status == InvoiceStatus.paid.value:
-            await callback.answer("Оплата по этому инвойсу уже подтверждена.")
+            await _answer_callback(callback, "Оплата по этому инвойсу уже подтверждена.")
             return
         if invoice.status == InvoiceStatus.rejected.value:
-            await callback.answer("Этот инвойс уже отклонён.", show_alert=True)
+            await _answer_callback(callback, "Этот инвойс уже отклонён.", show_alert=True)
             return
         if invoice.status == InvoiceStatus.expired.value:
-            await callback.answer("Срок инвойса уже закончился.", show_alert=True)
+            await _answer_callback(callback, "Срок инвойса уже закончился.", show_alert=True)
             return
         if ensure_utc(invoice.expires_at) <= utc_now():
             expire_open_invoice(invoice)
             await session.commit()
-            await callback.answer("Срок инвойса уже закончился.", show_alert=True)
+            await _answer_callback(callback, "Срок инвойса уже закончился.", show_alert=True)
             return
         mark_invoice_pending_review(invoice)
         if invoice.status != InvoiceStatus.pending_review.value:
-            await callback.answer("Инвойс нельзя отправить на проверку.", show_alert=True)
+            await _answer_callback(callback, "Инвойс нельзя отправить на проверку.", show_alert=True)
             return
         await session.commit()
         admin_text = format_invoice_for_admin(invoice, user)
@@ -416,11 +436,11 @@ async def invoice_paid(callback: CallbackQuery, callback_data: InvoiceAction, ap
             if invoice is not None and invoice.status == InvoiceStatus.pending_review.value:
                 invoice.status = InvoiceStatus.awaiting_transfer.value
                 await session.commit()
-        await callback.answer("Не смог уведомить администратора. Попробуйте ещё раз.", show_alert=True)
+        await _answer_callback(callback, "Не смог уведомить администратора. Попробуйте ещё раз.", show_alert=True)
         await callback.message.answer("Не смог отправить платёж администратору. Нажмите «Я оплатил» ещё раз.")
         return
 
-    await callback.answer("Передал платёж админу на проверку.")
+    await _answer_callback(callback, "Передал платёж админу на проверку.")
     await callback.message.answer("Платёж отправлен на проверку. Как только подтвержу перевод, пришлю доступ.")
 
 
@@ -514,6 +534,24 @@ def _apply_custom_plan_action(action: str, days: int, devices: int) -> tuple[int
     if action in device_actions:
         return days, clamp_custom_devices(devices + device_actions[action])
     raise ValueError("Некорректное действие конструктора.")
+
+
+def _custom_plan_noop_message(action: str, days: int, devices: int) -> str:
+    if action.startswith("dp"):
+        return f"Уже максимум: {days} дней."
+    if action.startswith("dm"):
+        return f"Уже минимум: {days} день."
+    if action == "up1":
+        return f"Уже максимум: {devices} устройств."
+    if action == "um1":
+        return f"Уже минимум: {devices} устройство."
+    if action.startswith("p"):
+        return "Уже выбран этот срок."
+    return "Уже выбрано."
+
+
+def _is_message_not_modified(exc: TelegramBadRequest) -> bool:
+    return "message is not modified" in str(exc).lower()
 
 
 async def _notify_admins_about_stars_schedule_error(
