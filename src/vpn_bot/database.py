@@ -88,3 +88,8 @@ async def _ensure_postgres_schema(conn) -> None:
     for column, statement in missing_columns.items():
         if column not in existing_columns:
             await conn.execute(text(statement))
+
+    if "xui_client_id" in existing_columns:
+        await conn.execute(text("ALTER TABLE subscriptions ALTER COLUMN xui_client_id TYPE TEXT"))
+    if "xui_email" in existing_columns:
+        await conn.execute(text("ALTER TABLE subscriptions ALTER COLUMN xui_email TYPE TEXT"))

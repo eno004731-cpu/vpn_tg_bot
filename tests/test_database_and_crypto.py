@@ -27,6 +27,11 @@ def test_encryption_round_trip_and_plaintext_compatibility() -> None:
     assert encrypt_value(encrypted, key) == encrypted
 
 
+def test_encrypted_subscription_identifiers_use_unbounded_columns() -> None:
+    assert str(Subscription.__table__.c.xui_client_id.type) == "TEXT"
+    assert str(Subscription.__table__.c.xui_email.type) == "TEXT"
+
+
 async def test_migrate_sqlite_to_database_url_preserves_rows(tmp_path) -> None:
     source_path = tmp_path / "source.sqlite3"
     target_path = tmp_path / "target.sqlite3"
