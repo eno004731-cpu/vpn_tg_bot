@@ -40,6 +40,8 @@ class InvoiceView:
 class StarsPayload:
     plan_code: str
     user_tg_id: int
+    reservation_id: Optional[int] = None
+    reservation_created_at_us: Optional[int] = None
 
 
 class OneTimePlanAlreadyPurchased(ValueError):
@@ -103,15 +105,47 @@ async def create_invoice(
     return invoice
 
 
-def build_stars_payload(plan_code: str, user_tg_id: int) -> str:
-    return f"stars:{plan_code}:{user_tg_id}"
+def build_stars_payload(
+    plan_code: str,
+    user_tg_id: int,
+    reservation_id: Optional[int] = None,
+    reservation_created_at_us: Optional[int] = None,
+) -> str:
+    if reservation_created_at_us is not None and reservation_id is None:
+        raise ValueError("reservation_created_at_us requires reservation_id")
+    parts = ["stars", plan_code, str(user_tg_id)]
+    if reservation_id is not None:
+        parts.append(str(reservation_id))
+    if reservation_created_at_us is not None:
+        parts.append(str(reservation_created_at_us))
+    return ":".join(parts)
 
 
 def parse_stars_payload(payload: str) -> StarsPayload:
-    prefix, plan_code, user_tg_id_raw = payload.split(":", maxsplit=2)
+    parts = payload.split(":", maxsplit=4)
+    if len(parts) not in {3, 4, 5}:
+        raise ValueError("Некорректный payload Stars.")
+    prefix, plan_code, user_tg_id_raw, *reservation_parts = parts
     if prefix != "stars" or not plan_code or not user_tg_id_raw.isdigit():
         raise ValueError("Некорректный payload Stars.")
-    return StarsPayload(plan_code=plan_code, user_tg_id=int(user_tg_id_raw))
+    reservation_id = None
+    reservation_created_at_us = None
+    if reservation_parts:
+        reservation_id_raw = reservation_parts[0]
+        if not reservation_id_raw.isdigit():
+            raise ValueError("Некорректный payload Stars.")
+        reservation_id = int(reservation_id_raw)
+    if len(reservation_parts) == 2:
+        reservation_created_at_us_raw = reservation_parts[1]
+        if not reservation_created_at_us_raw.isdigit():
+            raise ValueError("Некорректный payload Stars.")
+        reservation_created_at_us = int(reservation_created_at_us_raw)
+    return StarsPayload(
+        plan_code=plan_code,
+        user_tg_id=int(user_tg_id_raw),
+        reservation_id=reservation_id,
+        reservation_created_at_us=reservation_created_at_us,
+    )
 
 
 def build_stars_reference(telegram_payment_charge_id: str) -> str:
@@ -184,9 +218,9 @@ async def reserve_one_time_stars_checkout(
     *,
     user_id: int,
     plan: PlanDefinition,
-) -> None:
+) -> Optional[OneTimePlanReservation]:
     if not plan.one_time_per_user:
-        return
+        return None
 
     now = utc_now()
     active_reservation = await session.scalar(
@@ -204,15 +238,14 @@ async def reserve_one_time_stars_checkout(
     if await user_has_paid_plan(session, user_id, plan.code):
         raise OneTimePlanAlreadyPurchased(_one_time_error_message())
 
+    reservation = OneTimePlanReservation(
+        user_id=user_id,
+        plan_code=plan.code,
+        expires_at=now + timedelta(minutes=15),
+    )
     try:
         async with session.begin_nested():
-            session.add(
-                OneTimePlanReservation(
-                    user_id=user_id,
-                    plan_code=plan.code,
-                    expires_at=now + timedelta(minutes=15),
-                )
-            )
+            session.add(reservation)
             await session.flush()
     except IntegrityError as exc:
         existing = await session.scalar(
@@ -224,19 +257,33 @@ async def reserve_one_time_stars_checkout(
         if existing is not None and ensure_utc(existing.expires_at) > now:
             raise OneTimePlanPaymentAlreadyPending(_one_time_pending_error_message()) from exc
         raise
+    return reservation
+
+
+async def get_one_time_stars_checkout(
+    session: AsyncSession,
+    *,
+    reservation_id: int,
+) -> Optional[OneTimePlanReservation]:
+    reservation = await session.scalar(
+        select(OneTimePlanReservation).where(OneTimePlanReservation.id == reservation_id)
+    )
+    if reservation is None:
+        return None
+    if ensure_utc(reservation.expires_at) > utc_now():
+        return reservation
+    await session.delete(reservation)
+    await session.flush()
+    return None
 
 
 async def release_one_time_stars_checkout(
     session: AsyncSession,
     *,
-    user_id: int,
-    plan_code: str,
+    reservation_id: int,
 ) -> None:
     reservation = await session.scalar(
-        select(OneTimePlanReservation).where(
-            OneTimePlanReservation.user_id == user_id,
-            OneTimePlanReservation.plan_code == plan_code,
-        )
+        select(OneTimePlanReservation).where(OneTimePlanReservation.id == reservation_id)
     )
     if reservation is not None:
         await session.delete(reservation)

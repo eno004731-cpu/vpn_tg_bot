@@ -13,9 +13,15 @@ from vpn_bot.config import AppSettings, PaymentSettings, PlanDefinition, Setting
 from vpn_bot.database import build_session_factory, init_db
 from vpn_bot.handlers.user import invoice_paid, stars_payment_selected, stars_pre_checkout, transfer_payment_selected
 from vpn_bot.keyboards import InvoiceAction, PaymentMethodChoice
-from vpn_bot.models import Invoice, InvoiceStatus, User
+from vpn_bot.models import Invoice, InvoiceStatus, OneTimePlanReservation, User
 from vpn_bot.runtime import AppContext
 from vpn_bot.services.nodes import NodeRegistry
+from vpn_bot.services.payments import (
+    build_stars_payload,
+    parse_stars_payload,
+    purge_stale_one_time_reservations,
+    reserve_one_time_stars_checkout,
+)
 from vpn_bot.utils import utc_now
 
 
@@ -286,6 +292,9 @@ async def test_stars_payment_selected_blocks_second_parallel_open_payment(tmp_pa
         await engine.dispose()
 
     assert len(bot.invoices) == 1
+    parsed = parse_stars_payload(bot.invoices[0]["payload"])
+    assert parsed.reservation_id is not None
+    assert parsed.reservation_created_at_us is not None
     assert first_callback.answers == [("Открыл оплату Stars", False)]
     assert second_callback.answers == [
         ("Оплата по этому тарифу уже открыта. Завершите текущую оплату или подождите 15 минут.", True)
@@ -320,6 +329,59 @@ async def test_stars_payment_selected_releases_reservation_when_send_invoice_fai
     assert failing_callback.answers == [("Не удалось открыть оплату Stars. Попробуйте ещё раз.", True)]
     assert retry_callback.answers == [("Открыл оплату Stars", False)]
     assert len(retry_bot.invoices) == 1
+
+
+async def test_stars_pre_checkout_rejects_stale_one_time_invoice_payload(tmp_path) -> None:
+    settings = make_settings(admin_ids=(1,))
+    engine, session_factory = build_session_factory(tmp_path / "bot.sqlite3")
+    await init_db(engine)
+    nodes = NodeRegistry.from_settings(settings)
+    plan = make_trial_plan()
+    context = AppContext(
+        settings=settings,
+        plans={plan.code: plan},
+        engine=engine,
+        session_factory=session_factory,
+        nodes=nodes,
+    )
+    bot = FakeBot()
+    callback = FakeCallback(user_id=123, bot=bot)
+    stale_pre_checkout = None
+    fresh_pre_checkout = None
+
+    try:
+        await stars_payment_selected(callback, PaymentMethodChoice(code=plan.code, method="stars"), context)
+        old_payload = bot.invoices[0]["payload"]
+
+        async with session_factory() as session:
+            parsed = parse_stars_payload(old_payload)
+            assert parsed.reservation_id is not None
+            reservation = await session.scalar(
+                select(OneTimePlanReservation).where(OneTimePlanReservation.id == parsed.reservation_id)
+            )
+            assert reservation is not None
+            reservation.expires_at = utc_now() - timedelta(minutes=1)
+            await session.commit()
+            purged = await purge_stale_one_time_reservations(session)
+            assert purged == 1
+
+        retry_callback = FakeCallback(user_id=123, bot=bot)
+        await stars_payment_selected(retry_callback, PaymentMethodChoice(code=plan.code, method="stars"), context)
+        new_payload = bot.invoices[1]["payload"]
+
+        stale_pre_checkout = FakePreCheckout(user_id=123, payload=old_payload, total_amount=1)
+        fresh_pre_checkout = FakePreCheckout(user_id=123, payload=new_payload, total_amount=1)
+
+        await stars_pre_checkout(stale_pre_checkout, context)
+        await stars_pre_checkout(fresh_pre_checkout, context)
+    finally:
+        await nodes.close()
+        await engine.dispose()
+
+    assert stale_pre_checkout is not None
+    assert fresh_pre_checkout is not None
+    assert stale_pre_checkout.answers == [(False, "Эта оплата Stars устарела. Создайте новую оплату в боте.")]
+    assert fresh_pre_checkout.answers == [(True, None)]
 
 
 async def test_transfer_payment_selected_blocks_second_one_time_purchase(tmp_path) -> None:
@@ -371,15 +433,39 @@ async def test_stars_pre_checkout_rejects_second_trial_purchase(tmp_path) -> Non
         session_factory=session_factory,
         nodes=nodes,
     )
-    pre_checkout = FakePreCheckout(user_id=123, payload="stars:stars_test:123", total_amount=1)
+    payload = ""
 
     try:
         async with session_factory() as session:
-            invoice = await add_invoice(session, tg_id=123, status=InvoiceStatus.paid.value)
-            invoice.plan_code = plan.code
-            invoice.paid_at = utc_now()
+            user = User(tg_id=123, username="user", full_name="User")
+            session.add(user)
+            await session.flush()
+            reservation = await reserve_one_time_stars_checkout(session, user_id=user.id, plan=plan)
+            assert reservation is not None
+            session.add(
+                Invoice(
+                    user_id=user.id,
+                    plan_code=plan.code,
+                    plan_title=plan.title,
+                    duration_days=plan.duration_days,
+                    traffic_limit_bytes=plan.traffic_limit_bytes,
+                    amount_rub=Decimal("1.00"),
+                    amount_kopecks=100,
+                    reference_code="XTR-paid",
+                    status=InvoiceStatus.paid.value,
+                    expires_at=utc_now() + timedelta(minutes=15),
+                    paid_at=utc_now(),
+                )
+            )
+            payload = build_stars_payload(
+                plan.code,
+                user.tg_id,
+                reservation.id,
+                int(reservation.created_at.timestamp() * 1_000_000),
+            )
             await session.commit()
 
+        pre_checkout = FakePreCheckout(user_id=123, payload=payload, total_amount=1)
         await stars_pre_checkout(pre_checkout, context)
     finally:
         await nodes.close()

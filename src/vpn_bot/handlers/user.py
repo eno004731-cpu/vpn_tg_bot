@@ -34,6 +34,7 @@ from vpn_bot.services.payments import (
     expire_open_invoice,
     format_invoice_for_admin,
     format_invoice_for_user,
+    get_one_time_stars_checkout,
     mark_invoice_pending_review,
     parse_stars_payload,
     release_one_time_stars_checkout,
@@ -49,17 +50,11 @@ from vpn_bot.services.users import ensure_user
 from vpn_bot.utils import ensure_utc, utc_now
 
 router = Router(name="user")
+STALE_STARS_PAYMENT_MESSAGE = "Эта оплата Stars устарела. Создайте новую оплату в боте."
 
 
 def _one_time_plan_error() -> str:
     return "Этот тариф можно купить только один раз."
-
-
-async def _user_already_bought_plan(session, telegram_user, admin_ids: tuple[int, ...], plan: PlanDefinition) -> bool:
-    user = await ensure_user(session, telegram_user, admin_ids)
-    if not plan.one_time_per_user:
-        return False
-    return await user_has_paid_plan(session, user.id, plan.code)
 
 
 @router.message(CommandStart())
@@ -134,15 +129,20 @@ async def stars_payment_selected(
         await callback.answer("Не удалось определить пользователя.", show_alert=True)
         return
 
+    reservation_id = None
+    reservation_created_at_us = None
     async with app_context.session_factory() as session:
         user = await ensure_user(session, callback.from_user, app_context.settings.app.admin_ids)
         if plan.one_time_per_user:
             try:
-                await reserve_one_time_stars_checkout(
+                reservation = await reserve_one_time_stars_checkout(
                     session,
                     user_id=user.id,
                     plan=plan,
                 )
+                reservation_id = reservation.id if reservation is not None else None
+                if reservation is not None:
+                    reservation_created_at_us = int(ensure_utc(reservation.created_at).timestamp() * 1_000_000)
             except OneTimePlanAlreadyPurchased:
                 await session.commit()
                 await callback.answer(_one_time_plan_error(), show_alert=True)
@@ -162,17 +162,21 @@ async def stars_payment_selected(
             chat_id=callback.from_user.id,
             title=plan.title,
             description=description,
-            payload=build_stars_payload(plan.code, callback.from_user.id),
+            payload=build_stars_payload(
+                plan.code,
+                callback.from_user.id,
+                reservation_id,
+                reservation_created_at_us,
+            ),
             provider_token="",
             currency="XTR",
             prices=[LabeledPrice(label=plan.title, amount=plan.price_stars)],
         )
     except TelegramAPIError:
         logging.exception("Failed to open Stars invoice for user %s and plan %s", callback.from_user.id, plan.code)
-        if plan.one_time_per_user:
+        if reservation_id is not None:
             async with app_context.session_factory() as session:
-                user = await ensure_user(session, callback.from_user, app_context.settings.app.admin_ids)
-                await release_one_time_stars_checkout(session, user_id=user.id, plan_code=plan.code)
+                await release_one_time_stars_checkout(session, reservation_id=reservation_id)
                 await session.commit()
         await callback.answer("Не удалось открыть оплату Stars. Попробуйте ещё раз.", show_alert=True)
         return
@@ -199,12 +203,24 @@ async def stars_pre_checkout(pre_checkout: PreCheckoutQuery, app_context: AppCon
         return
 
     async with app_context.session_factory() as session:
-        if await _user_already_bought_plan(
-            session,
-            pre_checkout.from_user,
-            app_context.settings.app.admin_ids,
-            plan,
-        ):
+        user = await ensure_user(session, pre_checkout.from_user, app_context.settings.app.admin_ids)
+        if plan.one_time_per_user:
+            if payload.reservation_id is None or payload.reservation_created_at_us is None:
+                await session.commit()
+                await pre_checkout.answer(ok=False, error_message=STALE_STARS_PAYMENT_MESSAGE)
+                return
+            reservation = await get_one_time_stars_checkout(session, reservation_id=payload.reservation_id)
+            if (
+                reservation is None
+                or reservation.user_id != user.id
+                or reservation.plan_code != plan.code
+                or int(ensure_utc(reservation.created_at).timestamp() * 1_000_000)
+                != payload.reservation_created_at_us
+            ):
+                await session.commit()
+                await pre_checkout.answer(ok=False, error_message=STALE_STARS_PAYMENT_MESSAGE)
+                return
+        if await user_has_paid_plan(session, user.id, plan.code):
             await session.commit()
             await pre_checkout.answer(ok=False, error_message=_one_time_plan_error())
             return
@@ -239,6 +255,7 @@ async def stars_successful_payment(message: Message, app_context: AppContext) ->
     async with app_context.session_factory() as session:
         user = await ensure_user(session, message.from_user, app_context.settings.app.admin_ids)
         invoice = await session.scalar(select(Invoice).where(Invoice.reference_code == reference_code))
+        reservation_id = payload.reservation_id
         if invoice is None:
             invoice = await create_stars_invoice_record(
                 session,
@@ -265,11 +282,8 @@ async def stars_successful_payment(message: Message, app_context: AppContext) ->
                     "Администратор уже видит ситуацию и поможет вручную."
                 )
                 return
-        await release_one_time_stars_checkout(
-            session,
-            user_id=user.id,
-            plan_code=plan.code,
-        )
+        if reservation_id is not None:
+            await release_one_time_stars_checkout(session, reservation_id=reservation_id)
         if invoice.status == InvoiceStatus.rejected.value:
             await session.commit()
             await message.answer(

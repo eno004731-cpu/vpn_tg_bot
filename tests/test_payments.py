@@ -42,6 +42,19 @@ def test_stars_payload_round_trip() -> None:
 
     assert parsed.plan_code == "starter"
     assert parsed.user_tg_id == 123456789
+    assert parsed.reservation_id is None
+    assert parsed.reservation_created_at_us is None
+
+
+def test_stars_payload_round_trip_with_reservation() -> None:
+    payload = build_stars_payload("starter", 123456789, 77, 1_700_000_000)
+
+    parsed = parse_stars_payload(payload)
+
+    assert parsed.plan_code == "starter"
+    assert parsed.user_tg_id == 123456789
+    assert parsed.reservation_id == 77
+    assert parsed.reservation_created_at_us == 1_700_000_000
 
 
 def test_stars_reference_is_stable_and_short() -> None:
@@ -382,8 +395,9 @@ async def test_release_and_purge_stale_one_time_stars_checkout(tmp_path) -> None
         user = User(tg_id=123, username="user", full_name="User")
         session.add(user)
         await session.flush()
-        await reserve_one_time_stars_checkout(session, user_id=user.id, plan=plan)
-        await release_one_time_stars_checkout(session, user_id=user.id, plan_code=plan.code)
+        reservation = await reserve_one_time_stars_checkout(session, user_id=user.id, plan=plan)
+        assert reservation is not None
+        await release_one_time_stars_checkout(session, reservation_id=reservation.id)
         await session.commit()
         await reserve_one_time_stars_checkout(session, user_id=user.id, plan=plan)
         reservation = await session.scalar(select(OneTimePlanReservation))
