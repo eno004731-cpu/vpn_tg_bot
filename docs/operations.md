@@ -2,32 +2,41 @@
 
 ## Monitoring
 
-Установить `kube-prometheus-stack`:
+Создать Telegram secret для Alertmanager вне git:
 
 ```bash
-helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
-helm repo update
-sudo k3s kubectl create namespace monitoring --dry-run=client -o yaml | sudo k3s kubectl apply -f -
-helm upgrade --install kube-prometheus-stack prometheus-community/kube-prometheus-stack \
-  -n monitoring \
-  -f k8s/monitoring/kube-prometheus-stack-values.yaml
+cd /opt/vpn-bot
+read -s ALERTMANAGER_TELEGRAM_BOT_TOKEN
+read ALERTMANAGER_TELEGRAM_CHAT_ID
+sudo env ALERTMANAGER_TELEGRAM_BOT_TOKEN="$ALERTMANAGER_TELEGRAM_BOT_TOKEN" \
+  ALERTMANAGER_TELEGRAM_CHAT_ID="$ALERTMANAGER_TELEGRAM_CHAT_ID" \
+  ./ops/k3s/create_alertmanager_telegram_secret.sh
+unset ALERTMANAGER_TELEGRAM_BOT_TOKEN ALERTMANAGER_TELEGRAM_CHAT_ID
 ```
 
-Потом создать Alertmanager secret вне git и применить monitoring CRD-ресурсы:
+Установить `kube-prometheus-stack` и применить правила:
 
 ```bash
-sudo k3s kubectl apply -f /path/to/alertmanager-vpn-bot-secret.yaml
-sudo k3s kubectl apply -k k8s/monitoring
+sudo ./ops/k3s/install_monitoring_stack.sh
 ```
 
 Проверки:
 
 ```bash
+sudo k3s kubectl get pods -n monitoring
 sudo k3s kubectl get servicemonitor,prometheusrule -n vpn-prod
 curl https://panel.swift-log.ru/metrics
 sudo k3s kubectl port-forward -n vpn-prod service/vpn-bot-worker-metrics 9091:9091
 curl http://127.0.0.1:9091/metrics
 ```
+
+Проверить доставку в Telegram тестовым алёртом:
+
+```bash
+sudo ./ops/k3s/send_test_alert.sh
+```
+
+После теста в Telegram должен прийти `VpnBotTestAlert`, а затем resolved-сообщение.
 
 ## Host-level nightly backup
 

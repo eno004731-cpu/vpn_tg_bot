@@ -275,6 +275,16 @@ curl http://127.0.0.1:30080/metrics
 
 Мониторинг и nightly backup-операции описаны в [docs/operations.md](docs/operations.md).
 
+Быстрый monitoring setup:
+
+```bash
+cd /opt/vpn-bot
+sudo env ALERTMANAGER_TELEGRAM_BOT_TOKEN="..." ALERTMANAGER_TELEGRAM_CHAT_ID="..." \
+  ./ops/k3s/create_alertmanager_telegram_secret.sh
+sudo ./ops/k3s/install_monitoring_stack.sh
+sudo ./ops/k3s/send_test_alert.sh
+```
+
 ## Перед публикацией
 
 Проверьте, что в коммит не попадают локальные секреты и база:
