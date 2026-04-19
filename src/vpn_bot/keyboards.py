@@ -75,6 +75,15 @@ class AdminGrantPlan(CallbackData, prefix="ag"):
     page: int
 
 
+class AdminCustomGrantAction(CallbackData, prefix="acg"):
+    user_id: int
+    page: int
+    kind: str
+    days: int
+    devices: int
+    action: str
+
+
 def main_menu() -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
@@ -377,13 +386,43 @@ def admin_grant_plans_keyboard(user_id: int, page: int, plans: list[PlanDefiniti
     rows = [
         [
             InlineKeyboardButton(
-                text=plan.title,
-                callback_data=AdminGrantPlan(user_id=user_id, plan_code=plan.code, page=page).pack(),
+                text="Собрать Custom",
+                callback_data=AdminCustomGrantAction(
+                    user_id=user_id,
+                    page=page,
+                    kind=CUSTOM_PLAN_KIND,
+                    days=CUSTOM_PLAN_DEFAULT_DAYS,
+                    devices=CUSTOM_PLAN_DEFAULT_DEVICES,
+                    action="show",
+                ).pack(),
             )
-        ]
-        for plan in plans
-        if plan.provision_access
+        ],
+        [
+            InlineKeyboardButton(
+                text="Собрать Custom Premium",
+                callback_data=AdminCustomGrantAction(
+                    user_id=user_id,
+                    page=page,
+                    kind=PREMIUM_PLAN_KIND,
+                    days=CUSTOM_PLAN_DEFAULT_DAYS,
+                    devices=CUSTOM_PLAN_DEFAULT_DEVICES,
+                    action="show",
+                ).pack(),
+            )
+        ],
     ]
+    rows.extend(
+        [
+            [
+                InlineKeyboardButton(
+                    text=plan.title,
+                    callback_data=AdminGrantPlan(user_id=user_id, plan_code=plan.code, page=page).pack(),
+                )
+            ]
+            for plan in plans
+            if plan.provision_access
+        ]
+    )
     rows.append(
         [
             InlineKeyboardButton(
@@ -393,3 +432,92 @@ def admin_grant_plans_keyboard(user_id: int, page: int, plans: list[PlanDefiniti
         ]
     )
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def admin_custom_grant_keyboard(kind: str, days: int, devices: int, user_id: int, page: int) -> InlineKeyboardMarkup:
+    days = clamp_custom_days(days)
+    devices = clamp_custom_devices(devices)
+    preset_rows = [
+        CUSTOM_PLAN_DAY_PRESETS[0:4],
+        CUSTOM_PLAN_DAY_PRESETS[4:8],
+        CUSTOM_PLAN_DAY_PRESETS[8:11],
+        CUSTOM_PLAN_DAY_PRESETS[11:13],
+    ]
+    rows = [
+        [
+            InlineKeyboardButton(
+                text=f"{preset} дн",
+                callback_data=AdminCustomGrantAction(
+                    user_id=user_id,
+                    page=page,
+                    kind=kind,
+                    days=days,
+                    devices=devices,
+                    action=f"p{preset}",
+                ).pack(),
+            )
+            for preset in preset_row
+        ]
+        for preset_row in preset_rows
+    ]
+    rows.extend(
+        [
+            [
+                _admin_custom_grant_button(kind, days, devices, user_id, page, "-30 дн", "dm30"),
+                _admin_custom_grant_button(kind, days, devices, user_id, page, "-7 дн", "dm7"),
+                _admin_custom_grant_button(kind, days, devices, user_id, page, "-1 дн", "dm1"),
+            ],
+            [
+                _admin_custom_grant_button(kind, days, devices, user_id, page, "+1 дн", "dp1"),
+                _admin_custom_grant_button(kind, days, devices, user_id, page, "+7 дн", "dp7"),
+                _admin_custom_grant_button(kind, days, devices, user_id, page, "+30 дн", "dp30"),
+            ],
+            [
+                _admin_custom_grant_button(kind, days, devices, user_id, page, "-1 устройство", "um1"),
+                _admin_custom_grant_button(kind, days, devices, user_id, page, "+1 устройство", "up1"),
+            ],
+            [
+                InlineKeyboardButton(
+                    text="Выдать этот тариф",
+                    callback_data=AdminCustomGrantAction(
+                        user_id=user_id,
+                        page=page,
+                        kind=kind,
+                        days=days,
+                        devices=devices,
+                        action="grant",
+                    ).pack(),
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="Назад",
+                    callback_data=AdminCustomGrantAction(
+                        user_id=user_id,
+                        page=page,
+                        kind=kind,
+                        days=days,
+                        devices=devices,
+                        action="back",
+                    ).pack(),
+                )
+            ],
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _admin_custom_grant_button(
+    kind: str, days: int, devices: int, user_id: int, page: int, text: str, action: str
+) -> InlineKeyboardButton:
+    return InlineKeyboardButton(
+        text=text,
+        callback_data=AdminCustomGrantAction(
+            user_id=user_id,
+            page=page,
+            kind=kind,
+            days=days,
+            devices=devices,
+            action=action,
+        ).pack(),
+    )

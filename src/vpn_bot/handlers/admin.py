@@ -5,7 +5,7 @@ from html import escape
 from typing import Optional, Union
 
 from aiogram import Router
-from aiogram.exceptions import TelegramAPIError
+from aiogram.exceptions import TelegramAPIError, TelegramBadRequest
 from aiogram.filters import Command, CommandObject
 from aiogram.types import CallbackQuery, Message
 from sqlalchemy import func, or_, select
@@ -20,20 +20,29 @@ from vpn_bot.formatters import (
     format_traffic_usage,
 )
 from vpn_bot.keyboards import (
+    AdminCustomGrantAction,
     AdminGrantPlan,
     AdminInvoiceAction,
     AdminInvoicesPage,
     AdminSubscriptionAction,
     AdminUserAction,
     AdminUsersPage,
+    admin_custom_grant_keyboard,
     admin_grant_plans_keyboard,
     admin_invoices_page_keyboard,
     admin_user_keyboard,
     admin_user_search_back_keyboard,
     admin_users_keyboard,
+    format_custom_plan_builder,
 )
 from vpn_bot.models import Invoice, InvoiceStatus, Subscription, SubscriptionStatus, User
 from vpn_bot.runtime import AppContext
+from vpn_bot.services.custom_plans import (
+    build_custom_plan,
+    clamp_custom_days,
+    clamp_custom_devices,
+    normalize_custom_kind,
+)
 from vpn_bot.services.jobs import schedule_invoice_provisioning
 from vpn_bot.services.payments import reject_invoice
 from vpn_bot.services.subscriptions import (
@@ -54,6 +63,13 @@ OPEN_INVOICE_STATUSES = (
     InvoiceStatus.paid_pending_provision.value,
     InvoiceStatus.provision_failed.value,
 )
+
+
+async def _answer_callback(callback: CallbackQuery, text: str = "", *, show_alert: bool = False) -> None:
+    try:
+        await callback.answer(text, show_alert=show_alert)
+    except TelegramBadRequest:
+        logging.debug("Skipped callback answer because Telegram no longer accepts this query", exc_info=True)
 
 
 def _is_admin(message_or_callback: Union[Message, CallbackQuery], admin_ids: tuple[int, ...]) -> bool:
@@ -174,42 +190,63 @@ async def grant_plan(callback: CallbackQuery, callback_data: AdminGrantPlan, app
         await callback.answer("Тариф не найден или не выдаёт доступ.", show_alert=True)
         return
 
+    await _grant_access_with_plan(callback, callback_data.user_id, callback_data.page, plan, app_context)
+
+
+@router.callback_query(AdminCustomGrantAction.filter())
+async def custom_grant_action(
+    callback: CallbackQuery, callback_data: AdminCustomGrantAction, app_context: AppContext
+) -> None:
+    if not _is_admin(callback, app_context.settings.app.admin_ids):
+        await _answer_callback(callback, "Недостаточно прав.", show_alert=True)
+        return
+
+    if callback_data.action == "back":
+        await _show_grant_plan_menu(callback, app_context, callback_data.user_id, callback_data.page)
+        await _answer_callback(callback)
+        return
+
+    try:
+        kind = normalize_custom_kind(callback_data.kind)
+        current_days = clamp_custom_days(callback_data.days)
+        current_devices = clamp_custom_devices(callback_data.devices)
+        days, devices = _apply_custom_plan_action(callback_data.action, callback_data.days, callback_data.devices)
+        plan = build_custom_plan(kind, days, devices)
+    except ValueError:
+        await _answer_callback(callback, "Не удалось собрать тариф.", show_alert=True)
+        return
+
+    if callback_data.action == "grant":
+        await _grant_access_with_plan(callback, callback_data.user_id, callback_data.page, plan, app_context)
+        return
+
+    if callback_data.action != "show" and (days, devices) == (current_days, current_devices):
+        await _answer_callback(callback, _custom_plan_noop_message(callback_data.action, days, devices))
+        return
+
     async with app_context.session_factory() as session:
         user = await session.scalar(select(User).where(User.id == callback_data.user_id))
-        if user is None:
-            await callback.answer("Пользователь не найден.", show_alert=True)
-            return
-        try:
-            subscription = await provision_subscription_for_user(
-                session,
-                app_context.settings,
-                app_context.nodes,
-                user,
-                plan_code=plan.code,
-                plan_title=plan.title,
-                duration_days=plan.duration_days,
-                traffic_limit_bytes=plan.traffic_limit_bytes,
-                device_limit=plan.device_limit,
-            )
-        except Exception as exc:  # noqa: BLE001
-            logging.exception("Failed to grant access to user %s", callback_data.user_id)
-            await callback.answer(f"Не удалось выдать доступ: {exc}", show_alert=True)
-            return
+    if user is None:
+        await _answer_callback(callback, "Пользователь не найден.", show_alert=True)
+        return
 
-    await _safe_send_message(
-        callback.bot,
-        user.tg_id,
-        "\n".join(
-            [
-                "<b>Администратор выдал доступ</b>",
-                f"Тариф: {escape(subscription.plan_title)}",
-                f"Ссылка: <code>{escape(get_subscription_access_url(subscription, app_context.settings))}</code>",
-                f"Действует до: {ensure_utc(subscription.ends_at).astimezone().strftime('%Y-%m-%d %H:%M')}",
-            ]
-        ),
-    )
-    await callback.answer("Доступ выдан")
-    await _show_user_detail(callback, app_context, callback_data.user_id, callback_data.page)
+    try:
+        await callback.message.edit_text(
+            "\n".join(
+                [
+                    f"Выдача доступа для <code>{user.tg_id}</code> {_format_user_name(user)}:",
+                    "",
+                    format_custom_plan_builder(kind, days, devices),
+                ]
+            ),
+            reply_markup=admin_custom_grant_keyboard(kind, days, devices, user.id, callback_data.page),
+        )
+    except TelegramBadRequest as exc:
+        if _is_message_not_modified(exc):
+            await _answer_callback(callback)
+            return
+        raise
+    await _answer_callback(callback)
 
 
 @router.callback_query(AdminSubscriptionAction.filter())
@@ -493,6 +530,93 @@ async def _show_grant_plan_menu(
         f"Выберите тариф для <code>{user.tg_id}</code> {_format_user_name(user)}:",
         reply_markup=admin_grant_plans_keyboard(user.id, page, plans),
     )
+
+
+async def _grant_access_with_plan(
+    callback: CallbackQuery,
+    user_id: int,
+    page: int,
+    plan,
+    app_context: AppContext,
+) -> None:
+    async with app_context.session_factory() as session:
+        user = await session.scalar(select(User).where(User.id == user_id))
+        if user is None:
+            await _answer_callback(callback, "Пользователь не найден.", show_alert=True)
+            return
+        try:
+            subscription = await provision_subscription_for_user(
+                session,
+                app_context.settings,
+                app_context.nodes,
+                user,
+                plan_code=plan.code,
+                plan_title=plan.title,
+                duration_days=plan.duration_days,
+                traffic_limit_bytes=plan.traffic_limit_bytes,
+                device_limit=plan.device_limit,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logging.exception("Failed to grant access to user %s", user_id)
+            await _answer_callback(callback, f"Не удалось выдать доступ: {exc}", show_alert=True)
+            return
+
+    await _safe_send_message(
+        callback.bot,
+        user.tg_id,
+        "\n".join(
+            [
+                "<b>Администратор выдал доступ</b>",
+                f"Тариф: {escape(subscription.plan_title)}",
+                f"Ссылка: <code>{escape(get_subscription_access_url(subscription, app_context.settings))}</code>",
+                f"Действует до: {ensure_utc(subscription.ends_at).astimezone().strftime('%Y-%m-%d %H:%M')}",
+            ]
+        ),
+    )
+    await _answer_callback(callback, "Доступ выдан")
+    await _show_user_detail(callback, app_context, user_id, page)
+
+
+def _apply_custom_plan_action(action: str, days: int, devices: int) -> tuple[int, int]:
+    days = clamp_custom_days(days)
+    devices = clamp_custom_devices(devices)
+    if action in {"show", "grant"}:
+        return days, devices
+    if action.startswith("p") and action[1:].isdigit():
+        return clamp_custom_days(int(action[1:])), devices
+
+    day_actions = {
+        "dm30": -30,
+        "dm7": -7,
+        "dm1": -1,
+        "dp1": 1,
+        "dp7": 7,
+        "dp30": 30,
+    }
+    device_actions = {"um1": -1, "up1": 1}
+    if action in day_actions:
+        return clamp_custom_days(days + day_actions[action]), devices
+    if action in device_actions:
+        return days, clamp_custom_devices(devices + device_actions[action])
+    raise ValueError("Некорректное действие конструктора.")
+
+
+def _custom_plan_noop_message(action: str, days: int, devices: int) -> str:
+    if action.startswith("dp"):
+        return f"Уже максимум: {days} дней."
+    if action.startswith("dm"):
+        return f"Уже минимум: {days} день."
+    if action == "up1":
+        return f"Уже максимум: {devices} устройств."
+    if action == "um1":
+        return f"Уже минимум: {devices} устройство."
+    if action.startswith("p"):
+        return "Уже выбран этот срок."
+    return "Уже выбрано."
+
+
+def _is_message_not_modified(exc: TelegramBadRequest) -> bool:
+    return "message is not modified" in str(exc).lower()
 
 
 def _build_user_search_condition(query: Optional[str]):
