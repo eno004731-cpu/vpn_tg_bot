@@ -34,6 +34,8 @@ sudo k3s kubectl apply -k k8s
 sudo k3s kubectl rollout status statefulset/postgres -n vpn-prod
 ```
 
+Для автоматического push-deploy в k3s workflow теперь умеет отдельный режим `k8s`: он вызывает `ops/k3s/rollout_bot.sh`, собирает образ с tag = commit SHA и делает rollout `vpn-bot-web`/`vpn-bot-worker` через `kubectl set image` + `rollout status`.
+
 Для мониторинга отдельно поставить `kube-prometheus-stack` и применить CRD-ресурсы из `k8s/monitoring/`.
 
 После готовности Postgres:
@@ -51,6 +53,8 @@ curl https://panel.swift-log.ru/healthz
 curl https://panel.swift-log.ru/readyz
 curl https://panel.swift-log.ru/metrics
 ```
+
+`vpn-bot-web` в Kubernetes использует `RollingUpdate` с `maxUnavailable: 0`, поэтому новые pod'ы проходят readiness до удаления старых. `vpn-bot-worker` использует `Recreate`, чтобы в момент деплоя не запускать две рабочие реплики одновременно.
 
 ## Переключение Telegram
 

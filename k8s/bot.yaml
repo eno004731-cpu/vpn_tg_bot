@@ -34,6 +34,14 @@ metadata:
   namespace: vpn-prod
 spec:
   replicas: 2
+  revisionHistoryLimit: 3
+  minReadySeconds: 5
+  progressDeadlineSeconds: 180
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
   selector:
     matchLabels:
       app: vpn-bot-web
@@ -85,6 +93,17 @@ spec:
           secret:
             secretName: vpn-bot-runtime
 ---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: vpn-bot-web
+  namespace: vpn-prod
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: vpn-bot-web
+---
 apiVersion: v1
 kind: Service
 metadata:
@@ -107,6 +126,11 @@ metadata:
   namespace: vpn-prod
 spec:
   replicas: 1
+  revisionHistoryLimit: 3
+  minReadySeconds: 5
+  progressDeadlineSeconds: 180
+  strategy:
+    type: Recreate
   selector:
     matchLabels:
       app: vpn-bot-worker

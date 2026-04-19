@@ -304,19 +304,47 @@ CD запускается только при `push` в `main` или вручн
 vpn-bot,prod
 ```
 
-И systemd-сервисы:
+Есть два режима деплоя:
+
+- `webhook` — текущий production через systemd `vpn-bot-web` + `vpn-bot-worker`;
+- `k8s` — rollout в `k3s`, где `Deployment` сам меняет старые pod'ы на новые и поднимает их заново при падении.
+
+По умолчанию workflow остаётся в `webhook`. Чтобы переключить push-деплой на Kubernetes, достаточно завести GitHub Actions variable:
+
+```text
+VPN_BOT_DEPLOY_MODE=k8s
+```
+
+Опционально можно задать:
+
+```text
+VPN_BOT_K8S_NAMESPACE=vpn-prod
+VPN_BOT_K8S_RUNTIME_SECRET=vpn-bot-runtime
+VPN_BOT_K8S_IMAGE_REPO=ghcr.io/eno004731-cpu/vpn_tg_bot
+```
+
+Текущие systemd-сервисы:
 
 ```bash
 sudo systemctl status vpn-bot-web --no-pager
 sudo systemctl status vpn-bot-worker --no-pager
 ```
 
-CD по умолчанию работает в webhook-режиме:
+CD в `webhook`-режиме:
 
-- ставит unit-файлы из `ops/systemd/vpn-bot-web.service` и `ops/systemd/vpn-bot-worker.service`;
-- делает `systemctl daemon-reload`;
+- ставит unit-файлы через `ops/systemd/install_bot_units.sh`;
+- останавливает старые сервисы и stray Python-процессы;
 - отключает polling fallback `vpn-bot`;
-- включает и перезапускает `vpn-bot-web` и `vpn-bot-worker`.
+- включает и перезапускает `vpn-bot-web` и `vpn-bot-worker` через `ops/systemd/restart_bot_services.sh`.
+
+CD в `k8s`-режиме:
+
+- собирает локальный образ с tag = commit SHA;
+- импортирует его в `k3s` containerd;
+- обновляет secret `vpn-bot-runtime`;
+- делает `kubectl apply -k k8s`;
+- меняет image в `vpn-bot-web` и `vpn-bot-worker`;
+- ждёт `rollout status`, пока старые pod'ы заменятся новыми.
 
 Чтобы runner мог делать это без пароля:
 
@@ -326,21 +354,11 @@ sudo visudo -f /etc/sudoers.d/github-runner-vpn-bot
 
 ```text
 Cmnd_Alias VPN_BOT_DEPLOY = \
-  /usr/bin/install -m 0644 /opt/vpn-bot/ops/systemd/vpn-bot-web.service /etc/systemd/system/vpn-bot-web.service, \
-  /usr/bin/install -m 0644 /opt/vpn-bot/ops/systemd/vpn-bot-worker.service /etc/systemd/system/vpn-bot-worker.service, \
-  /usr/bin/systemctl daemon-reload, \
-  /usr/bin/systemctl disable --now vpn-bot, \
-  /usr/bin/systemctl enable vpn-bot-web vpn-bot-worker, \
-  /usr/bin/systemctl reset-failed vpn-bot-web, \
-  /usr/bin/systemctl reset-failed vpn-bot-worker, \
-  /usr/bin/systemctl restart vpn-bot-web, \
-  /usr/bin/systemctl restart vpn-bot-worker, \
-  /usr/bin/systemctl is-active --quiet vpn-bot-web, \
-  /usr/bin/systemctl is-active --quiet vpn-bot-worker, \
-  /usr/bin/systemctl status vpn-bot-web --no-pager, \
-  /usr/bin/systemctl status vpn-bot-worker --no-pager
+  /opt/vpn-bot/ops/systemd/install_bot_units.sh, \
+  /opt/vpn-bot/ops/systemd/restart_bot_services.sh, \
+  /opt/vpn-bot/ops/k3s/rollout_bot.sh
 
 github-runner ALL=(root) NOPASSWD: VPN_BOT_DEPLOY
 ```
 
-Если нужен временный rollback в polling, в `.github/workflows/deploy.yml` можно поменять `DEPLOY_MODE` на `polling`; тогда runner должен также иметь права на `enable/restart/status` для `vpn-bot`.
+Если нужен временный rollback в polling, workflow тоже поддерживает режим `polling`.

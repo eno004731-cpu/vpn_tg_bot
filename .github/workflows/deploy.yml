@@ -20,9 +20,14 @@ jobs:
 
     env:
       APP_DIR: /opt/vpn-bot
-      POLLING_SERVICE_NAME: vpn-bot
-      WEBHOOK_SERVICE_NAMES: vpn-bot-web vpn-bot-worker
-      DEPLOY_MODE: webhook
+      DEFAULT_DEPLOY_MODE: webhook
+      DEPLOY_MODE: ${{ vars.VPN_BOT_DEPLOY_MODE }}
+      DEFAULT_K8S_NAMESPACE: vpn-prod
+      K8S_NAMESPACE: ${{ vars.VPN_BOT_K8S_NAMESPACE }}
+      DEFAULT_K8S_RUNTIME_SECRET: vpn-bot-runtime
+      K8S_RUNTIME_SECRET: ${{ vars.VPN_BOT_K8S_RUNTIME_SECRET }}
+      DEFAULT_K8S_IMAGE_REPO: ghcr.io/eno004731-cpu/vpn_tg_bot
+      K8S_IMAGE_REPO: ${{ vars.VPN_BOT_K8S_IMAGE_REPO }}
 
     steps:
       - name: Checkout for checks
@@ -82,54 +87,51 @@ jobs:
           .venv/bin/python -m pip install -e .
           .venv/bin/python -m vpn_bot init-db
 
-      - name: Install systemd service units
+      - name: Resolve deployment settings
+        id: deploy-settings
         run: |
           set -euo pipefail
-          cd "$APP_DIR"
+          deploy_mode="${DEPLOY_MODE:-$DEFAULT_DEPLOY_MODE}"
+          namespace="${K8S_NAMESPACE:-$DEFAULT_K8S_NAMESPACE}"
+          runtime_secret="${K8S_RUNTIME_SECRET:-$DEFAULT_K8S_RUNTIME_SECRET}"
+          image_repo="${K8S_IMAGE_REPO:-$DEFAULT_K8S_IMAGE_REPO}"
 
-          if [ "$DEPLOY_MODE" = "webhook" ]; then
-            for service in $WEBHOOK_SERVICE_NAMES; do
-              unit_path="ops/systemd/${service}.service"
-              if [ ! -f "$unit_path" ]; then
-                echo "::error::Missing systemd unit template: $unit_path"
-                exit 1
-              fi
-              sudo -n install -m 0644 "$APP_DIR/$unit_path" "/etc/systemd/system/${service}.service"
-            done
-          fi
+          case "$deploy_mode" in
+            webhook|polling|k8s) ;;
+            *)
+              echo "::error::Unsupported deploy mode: $deploy_mode"
+              exit 1
+              ;;
+          esac
 
-          sudo -n systemctl daemon-reload
+          {
+            echo "deploy_mode=$deploy_mode"
+            echo "namespace=$namespace"
+            echo "runtime_secret=$runtime_secret"
+            echo "image_repo=$image_repo"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Install systemd service units
+        if: steps.deploy-settings.outputs.deploy_mode == 'webhook' || steps.deploy-settings.outputs.deploy_mode == 'polling'
+        run: |
+          set -euo pipefail
+          sudo -n "$APP_DIR/ops/systemd/install_bot_units.sh" "${{ steps.deploy-settings.outputs.deploy_mode }}"
 
       - name: Restart bot services
+        if: steps.deploy-settings.outputs.deploy_mode == 'webhook' || steps.deploy-settings.outputs.deploy_mode == 'polling'
         run: |
           set -euo pipefail
+          sudo -n "$APP_DIR/ops/systemd/restart_bot_services.sh" "${{ steps.deploy-settings.outputs.deploy_mode }}"
 
-          if [ "$DEPLOY_MODE" = "webhook" ]; then
-            if systemctl cat "$POLLING_SERVICE_NAME" >/dev/null 2>&1; then
-              sudo -n systemctl disable --now "$POLLING_SERVICE_NAME" || true
-            fi
-
-            sudo -n systemctl enable $WEBHOOK_SERVICE_NAMES
-            for service in $WEBHOOK_SERVICE_NAMES; do
-              sudo -n systemctl reset-failed "$service" || true
-              sudo -n systemctl restart "$service"
-              sleep 2
-              sudo -n systemctl is-active --quiet "$service"
-              sudo -n systemctl status "$service" --no-pager
-            done
-          else
-            for service in $WEBHOOK_SERVICE_NAMES; do
-              if systemctl cat "$service" >/dev/null 2>&1; then
-                sudo -n systemctl disable --now "$service" || true
-              fi
-            done
-
-            sudo -n systemctl enable "$POLLING_SERVICE_NAME"
-            sudo -n systemctl reset-failed "$POLLING_SERVICE_NAME" || true
-            sudo -n systemctl restart "$POLLING_SERVICE_NAME"
-            sudo -n systemctl is-active --quiet "$POLLING_SERVICE_NAME"
-            sudo -n systemctl status "$POLLING_SERVICE_NAME" --no-pager
-          fi
+      - name: Roll out bot in k3s
+        if: steps.deploy-settings.outputs.deploy_mode == 'k8s'
+        run: |
+          set -euo pipefail
+          sudo -n "$APP_DIR/ops/k3s/rollout_bot.sh" \
+            "$GITHUB_SHA" \
+            "${{ steps.deploy-settings.outputs.namespace }}" \
+            "${{ steps.deploy-settings.outputs.runtime_secret }}" \
+            "${{ steps.deploy-settings.outputs.image_repo }}"
 
       - name: Deployment summary
         run: |
@@ -138,7 +140,8 @@ jobs:
             echo ""
             echo "- Commit: \`$GITHUB_SHA\`"
             echo "- App dir: \`$APP_DIR\`"
-            echo "- Deploy mode: \`$DEPLOY_MODE\`"
-            echo "- Webhook services: \`$WEBHOOK_SERVICE_NAMES\`"
-            echo "- Polling fallback service: \`$POLLING_SERVICE_NAME\`"
+            echo "- Deploy mode: \`${{ steps.deploy-settings.outputs.deploy_mode }}\`"
+            echo "- K8s namespace: \`${{ steps.deploy-settings.outputs.namespace }}\`"
+            echo "- K8s runtime secret: \`${{ steps.deploy-settings.outputs.runtime_secret }}\`"
+            echo "- K8s image repo: \`${{ steps.deploy-settings.outputs.image_repo }}\`"
           } >> "$GITHUB_STEP_SUMMARY"
