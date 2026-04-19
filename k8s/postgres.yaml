@@ -1,15 +1,4 @@
 apiVersion: v1
-kind: Secret
-metadata:
-  name: postgres-secret
-  namespace: vpn-prod
-type: Opaque
-stringData:
-  POSTGRES_DB: vpn_bot
-  POSTGRES_USER: vpn_bot
-  POSTGRES_PASSWORD: change-me-in-vault-or-k8s-secret
----
-apiVersion: v1
 kind: Service
 metadata:
   name: postgres

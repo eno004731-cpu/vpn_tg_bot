@@ -247,19 +247,28 @@ public_port = 443
 - `monitoring/` — values и custom resources для `kube-prometheus-stack`;
 - `xui-template.yaml` — подготовка 3x-ui на тестовых портах, не включена в `kustomization.yaml`.
 
+`postgres-secret` не хранится в git и должен быть создан в кластере до rollout. `vpn-bot-web` дополнительно открыт через `NodePort` `30080`, чтобы текущий Caddy мог проксировать HTTPS в k8s без обязательного ingress cutover.
+
 Базовая проверка:
 
 ```bash
 chmod +x ops/k3s/build_and_import_image.sh ops/k3s/create_runtime_secret.sh
+sudo k3s kubectl create namespace vpn-prod --dry-run=client -o yaml | sudo k3s kubectl apply -f -
+sudo k3s kubectl create secret generic postgres-secret \
+  -n vpn-prod \
+  --from-literal=POSTGRES_DB=vpn_bot \
+  --from-literal=POSTGRES_USER=vpn_bot \
+  --from-literal=POSTGRES_PASSWORD='replace-with-real-password' \
+  --dry-run=client -o yaml | sudo k3s kubectl apply -f -
 sudo APP_DIR=/opt/vpn-bot ./ops/k3s/build_and_import_image.sh
 sudo RUNTIME_TOML_PATH=/opt/vpn-bot/secrets/runtime.toml ./ops/k3s/create_runtime_secret.sh
 sudo k3s kubectl apply -k k8s
 sudo k3s kubectl rollout status deployment/vpn-bot-web -n vpn-prod
 sudo k3s kubectl rollout status deployment/vpn-bot-worker -n vpn-prod
 sudo k3s kubectl rollout status statefulset/postgres -n vpn-prod
-curl https://panel.swift-log.ru/healthz
-curl https://panel.swift-log.ru/readyz
-curl https://panel.swift-log.ru/metrics
+curl http://127.0.0.1:30080/healthz
+curl http://127.0.0.1:30080/readyz
+curl http://127.0.0.1:30080/metrics
 ```
 
 Текущий `x-ui`/VPN на systemd эти манифесты не трогают. Переключать Telegram webhook можно только после миграции базы и проверки `web/worker`. Подробный порядок: [docs/kubernetes-rollout.md](docs/kubernetes-rollout.md).

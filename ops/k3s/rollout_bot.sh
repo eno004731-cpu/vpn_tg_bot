@@ -26,6 +26,14 @@ SECRET_NAME="$SECRET_NAME" \
 RUNTIME_TOML_PATH="$RUNTIME_TOML_PATH" \
 "$SCRIPT_DIR/create_runtime_secret.sh"
 
+if ! "${K3S_BIN[@]}" kubectl get secret postgres-secret -n "$NAMESPACE" >/dev/null 2>&1; then
+  cat >&2 <<EOF
+postgres-secret is missing in namespace $NAMESPACE.
+Create it before rollout so kubectl apply does not deploy Postgres with placeholder credentials.
+EOF
+  exit 1
+fi
+
 "${K3S_BIN[@]}" kubectl apply -k "$APP_DIR/k8s"
 "${K3S_BIN[@]}" kubectl set image deployment/vpn-bot-web vpn-bot="$IMAGE_NAME" -n "$NAMESPACE"
 "${K3S_BIN[@]}" kubectl set image deployment/vpn-bot-worker vpn-bot="$IMAGE_NAME" -n "$NAMESPACE"

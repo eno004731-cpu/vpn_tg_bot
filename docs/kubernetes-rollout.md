@@ -10,14 +10,26 @@
 cp data/bot.sqlite3 data/bot.sqlite3.backup
 ```
 
-2. Поднять k3s, ingress-nginx и cert-manager.
+2. Поднять k3s. Для первого cutover текущий Caddy может проксировать в k8s `NodePort` `127.0.0.1:30080`, поэтому ingress-nginx/cert-manager можно подключить позже.
 3. Проверить DNS `panel.swift-log.ru`.
 4. Подготовить Kubernetes Secret `vpn-bot-runtime` из `/opt/vpn-bot/secrets/runtime.toml`.
-5. Указать в runtime:
+5. Подготовить Kubernetes Secret `postgres-secret` вне git:
+
+```bash
+sudo k3s kubectl create namespace vpn-prod --dry-run=client -o yaml | sudo k3s kubectl apply -f -
+sudo k3s kubectl create secret generic postgres-secret \
+  -n vpn-prod \
+  --from-literal=POSTGRES_DB=vpn_bot \
+  --from-literal=POSTGRES_USER=vpn_bot \
+  --from-literal=POSTGRES_PASSWORD='replace-with-real-password' \
+  --dry-run=client -o yaml | sudo k3s kubectl apply -f -
+```
+
+6. Указать в runtime:
 
 ```toml
 [app]
-database_url = "postgresql://vpn_bot:change-me@postgres.vpn-prod.svc.cluster.local:5432/vpn_bot"
+database_url = "postgresql+asyncpg://vpn_bot:replace-with-real-password@postgres.vpn-prod.svc.cluster.local:5432/vpn_bot"
 webhook_path_secret = "telegram-webhook-path"
 webhook_secret_token = "telegram-secret-token"
 field_encryption_key = "replace-with-vault-rendered-key"
@@ -49,18 +61,20 @@ vpn-bot migrate-sqlite-to-postgres --sqlite data/bot.sqlite3 --database-url "$VP
 ```bash
 sudo k3s kubectl rollout status deployment/vpn-bot-web -n vpn-prod
 sudo k3s kubectl rollout status deployment/vpn-bot-worker -n vpn-prod
-curl https://panel.swift-log.ru/healthz
-curl https://panel.swift-log.ru/readyz
-curl https://panel.swift-log.ru/metrics
+curl http://127.0.0.1:30080/healthz
+curl http://127.0.0.1:30080/readyz
+curl http://127.0.0.1:30080/metrics
 ```
 
 `vpn-bot-web` в Kubernetes использует `RollingUpdate` с `maxUnavailable: 0`, поэтому новые pod'ы проходят readiness до удаления старых. `vpn-bot-worker` использует `Recreate`, чтобы в момент деплоя не запускать две рабочие реплики одновременно.
 
 ## Переключение Telegram
 
-1. Установить webhook на `https://panel.swift-log.ru/telegram/<webhook_path_secret>` с `secret_token`.
-2. Остановить старый systemd `vpn-bot`.
-3. Проверить `/start`, `/buy`, тест Stars за 1 звезду, manual approve, `/my`, `/admin nodes`.
+1. Переключить Caddy с `127.0.0.1:8080` на `127.0.0.1:30080` и выполнить `sudo systemctl reload caddy`.
+2. Проверить `curl https://panel.swift-log.ru/healthz` и `curl https://panel.swift-log.ru/readyz`.
+3. Установить webhook на `https://panel.swift-log.ru/telegram/<webhook_path_secret>` с `secret_token`.
+4. Остановить старые systemd-сервисы `vpn-bot-web` и `vpn-bot-worker`.
+5. Проверить `/start`, `/buy`, тест Stars за 1 звезду, manual approve, `/my`, `/admin nodes`.
 
 ## Rollback
 
@@ -71,7 +85,7 @@ sudo k3s kubectl scale deployment/vpn-bot-web -n vpn-prod --replicas=0
 sudo k3s kubectl scale deployment/vpn-bot-worker -n vpn-prod --replicas=0
 ```
 
-Дальше удалить Telegram webhook и вернуть systemd `vpn-bot run`. VPN/3x-ui при этом остаются как были.
+Дальше вернуть Caddy на `127.0.0.1:8080`, запустить `vpn-bot-web` и `vpn-bot-worker` через systemd. VPN/3x-ui при этом остаются как были.
 
 ## 3x-ui
 
