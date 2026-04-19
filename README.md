@@ -247,7 +247,7 @@ public_port = 443
 - `monitoring/` — values и custom resources для `kube-prometheus-stack`;
 - `xui-template.yaml` — подготовка 3x-ui на тестовых портах, не включена в `kustomization.yaml`.
 
-`postgres-secret` не хранится в git и должен быть создан в кластере до rollout. `vpn-bot-web` дополнительно открыт через `NodePort` `30080`, чтобы текущий Caddy мог проксировать HTTPS в k8s без обязательного ingress cutover.
+`postgres-secret` не хранится в git и должен быть создан в кластере до rollout. `vpn-bot-web` дополнительно открыт через `NodePort` `30080`, чтобы текущий Caddy мог проксировать HTTPS в k8s без обязательного ingress cutover. Rollout-скрипт автоматически закрывает `30080` firewall-правилом для всех интерфейсов кроме `loopback`.
 
 Базовая проверка:
 
@@ -350,10 +350,12 @@ CD в `k8s`-режиме:
 
 - собирает локальный образ с tag = commit SHA;
 - импортирует его в `k3s` containerd;
+- закрывает `NodePort` `30080` от внешнего доступа через host firewall;
 - обновляет secret `vpn-bot-runtime`;
 - делает `kubectl apply -k k8s`;
 - меняет image в `vpn-bot-web` и `vpn-bot-worker`;
 - ждёт `rollout status`, пока старые pod'ы заменятся новыми.
+- после успешного rollout отключает host systemd-сервисы бота, чтобы рядом не работал второй worker.
 
 Чтобы runner мог делать это без пароля:
 

@@ -11,6 +11,7 @@ cp data/bot.sqlite3 data/bot.sqlite3.backup
 ```
 
 2. Поднять k3s. Для первого cutover текущий Caddy может проксировать в k8s `NodePort` `127.0.0.1:30080`, поэтому ingress-nginx/cert-manager можно подключить позже.
+   `ops/k3s/rollout_bot.sh` автоматически ставит firewall-правило, которое закрывает `30080` для всех интерфейсов кроме loopback.
 3. Проверить DNS `panel.swift-log.ru`.
 4. Подготовить Kubernetes Secret `vpn-bot-runtime` из `/opt/vpn-bot/secrets/runtime.toml`.
 5. Подготовить Kubernetes Secret `postgres-secret` вне git:
@@ -73,7 +74,7 @@ curl http://127.0.0.1:30080/metrics
 1. Переключить Caddy с `127.0.0.1:8080` на `127.0.0.1:30080` и выполнить `sudo systemctl reload caddy`.
 2. Проверить `curl https://panel.swift-log.ru/healthz` и `curl https://panel.swift-log.ru/readyz`.
 3. Установить webhook на `https://panel.swift-log.ru/telegram/<webhook_path_secret>` с `secret_token`.
-4. Остановить старые systemd-сервисы `vpn-bot-web` и `vpn-bot-worker`.
+4. Остановить старые systemd-сервисы `vpn-bot-web` и `vpn-bot-worker`. При deploy mode `k8s` это делает workflow после успешного rollout через `ops/systemd/restart_bot_services.sh k8s`.
 5. Проверить `/start`, `/buy`, тест Stars за 1 звезду, manual approve, `/my`, `/admin nodes`.
 
 ## Rollback

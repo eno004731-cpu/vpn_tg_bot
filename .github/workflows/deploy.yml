@@ -78,15 +78,6 @@ jobs:
           git checkout -B main origin/main
           git reset --hard "$GITHUB_SHA"
 
-      - name: Install app and migrate database
-        run: |
-          set -euo pipefail
-          cd "$APP_DIR"
-          python3 -m venv .venv
-          .venv/bin/python -m pip install --upgrade pip
-          .venv/bin/python -m pip install -e .
-          .venv/bin/python -m vpn_bot init-db
-
       - name: Resolve deployment settings
         id: deploy-settings
         run: |
@@ -111,6 +102,16 @@ jobs:
             echo "image_repo=$image_repo"
           } >> "$GITHUB_OUTPUT"
 
+      - name: Install app and migrate database
+        if: steps.deploy-settings.outputs.deploy_mode == 'webhook' || steps.deploy-settings.outputs.deploy_mode == 'polling'
+        run: |
+          set -euo pipefail
+          cd "$APP_DIR"
+          python3 -m venv .venv
+          .venv/bin/python -m pip install --upgrade pip
+          .venv/bin/python -m pip install -e .
+          .venv/bin/python -m vpn_bot init-db
+
       - name: Install systemd service units
         if: steps.deploy-settings.outputs.deploy_mode == 'webhook' || steps.deploy-settings.outputs.deploy_mode == 'polling'
         run: |
@@ -132,6 +133,12 @@ jobs:
             "${{ steps.deploy-settings.outputs.namespace }}" \
             "${{ steps.deploy-settings.outputs.runtime_secret }}" \
             "${{ steps.deploy-settings.outputs.image_repo }}"
+
+      - name: Disable systemd bot services after k8s rollout
+        if: steps.deploy-settings.outputs.deploy_mode == 'k8s'
+        run: |
+          set -euo pipefail
+          sudo -n "$APP_DIR/ops/systemd/restart_bot_services.sh" k8s
 
       - name: Deployment summary
         run: |

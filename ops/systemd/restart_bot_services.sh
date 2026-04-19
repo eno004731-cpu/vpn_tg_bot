@@ -14,7 +14,7 @@ STALE_INSTANCE_PATTERNS=(
   "vpn-bot-worker@*.service"
 )
 
-if [[ "$DEPLOY_MODE" != "webhook" && "$DEPLOY_MODE" != "polling" ]]; then
+if [[ "$DEPLOY_MODE" != "webhook" && "$DEPLOY_MODE" != "polling" && "$DEPLOY_MODE" != "k8s" ]]; then
   echo "Unsupported deploy mode for systemd restart: $DEPLOY_MODE" >&2
   exit 1
 fi
@@ -67,7 +67,7 @@ if [[ "$DEPLOY_MODE" == "webhook" ]]; then
     systemctl is-active --quiet "$service"
     systemctl status "$service" --no-pager
   done
-else
+elif [[ "$DEPLOY_MODE" == "polling" ]]; then
   for service in "${WEBHOOK_SERVICE_NAMES[@]}"; do
     if systemctl cat "$service" >/dev/null 2>&1; then
       systemctl disable --now "$service" || true
@@ -80,6 +80,19 @@ else
   sleep 2
   systemctl is-active --quiet "$POLLING_SERVICE_NAME"
   systemctl status "$POLLING_SERVICE_NAME" --no-pager
+else
+  if systemctl cat "$POLLING_SERVICE_NAME" >/dev/null 2>&1; then
+    systemctl disable --now "$POLLING_SERVICE_NAME" || true
+  fi
+  for service in "${WEBHOOK_SERVICE_NAMES[@]}"; do
+    if systemctl cat "$service" >/dev/null 2>&1; then
+      systemctl disable --now "$service" || true
+    fi
+  done
 fi
 
-echo "Restarted services in $DEPLOY_MODE mode"
+if [[ "$DEPLOY_MODE" == "k8s" ]]; then
+  echo "Disabled systemd bot services for k8s mode"
+else
+  echo "Restarted services in $DEPLOY_MODE mode"
+fi
