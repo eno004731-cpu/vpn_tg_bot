@@ -32,8 +32,10 @@ Telegram получает только allowlist из actionable alerts:
 
 Служебные и шумные kube-prometheus алерты вроде `Watchdog`, `InfoInhibitor`,
 `KubeProxyDown`, `KubeControllerManagerDown`, `KubeSchedulerDown` не отправляются в Telegram.
+Также в `null` уходят все алерты без `severity` и с `severity="none"`.
 Если secret уже существует, его можно пересоздать без повторного ввода токена: скрипт возьмёт
-`bot_token` и `chat_id` из текущего Kubernetes Secret и обновит только routing config.
+`bot_token` и `chat_id` из текущего Kubernetes Secret, обновит routing config и перезапустит
+Alertmanager StatefulSet, чтобы старый routing не продолжал слать шум.
 
 ```bash
 sudo ./ops/k3s/create_alertmanager_telegram_secret.sh

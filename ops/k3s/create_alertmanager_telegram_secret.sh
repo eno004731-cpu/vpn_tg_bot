@@ -6,6 +6,7 @@ SECRET_NAME="${ALERTMANAGER_SECRET_NAME:-alertmanager-vpn-bot}"
 BOT_TOKEN="${ALERTMANAGER_TELEGRAM_BOT_TOKEN:-}"
 CHAT_ID="${ALERTMANAGER_TELEGRAM_CHAT_ID:-}"
 ACTIONABLE_ALERTS_REGEX="${ACTIONABLE_ALERTS_REGEX:-VpnBotReadyzDown|VpnBotWebhookErrorsHigh|VpnBotProvisionFailuresPresent|VpnBotJobsStuck|VpnBotWorkerDown|PostgresDown|VaultDown|PodCrashLooping|HighCpuOrMemoryUsage|VpnBotBackupJobFailed|K3sNodeNotReady|NodeCpuHigh|NodeMemoryHigh|NodeDiskSpaceLow|VpnBotTestAlert}"
+NOISY_ALERTS_REGEX="${NOISY_ALERTS_REGEX:-InfoInhibitor|Watchdog|KubeProxyDown|KubeControllerManagerDown|KubeSchedulerDown|KubeEtcdDown}"
 
 if [ "${EUID:-$(id -u)}" -eq 0 ]; then
   K3S_BIN=(k3s)
@@ -66,6 +67,15 @@ route:
   group_interval: 5m
   repeat_interval: 4h
   routes:
+    - receiver: "null"
+      matchers:
+        - 'severity=""'
+    - receiver: "null"
+      matchers:
+        - 'severity="none"'
+    - receiver: "null"
+      matchers:
+        - 'alertname=~"$NOISY_ALERTS_REGEX"'
     - receiver: telegram
       matchers:
         - 'alertname=~"$ACTIONABLE_ALERTS_REGEX"'
@@ -96,5 +106,18 @@ EOF
   --from-file=alertmanager.yaml="$tmp_config" \
   --dry-run=client -o yaml \
   | "${K3S_BIN[@]}" kubectl apply -f -
+
+alertmanager_statefulsets="$("${K3S_BIN[@]}" kubectl get statefulset \
+  -n "$MONITORING_NAMESPACE" \
+  -l app.kubernetes.io/name=alertmanager \
+  -o name 2>/dev/null || true)"
+
+if [ -n "$alertmanager_statefulsets" ]; then
+  while IFS= read -r statefulset; do
+    [ -z "$statefulset" ] && continue
+    "${K3S_BIN[@]}" kubectl rollout restart "$statefulset" -n "$MONITORING_NAMESPACE"
+    "${K3S_BIN[@]}" kubectl rollout status "$statefulset" -n "$MONITORING_NAMESPACE" --timeout=180s
+  done <<<"$alertmanager_statefulsets"
+fi
 
 echo "Updated Alertmanager Telegram secret $SECRET_NAME in namespace $MONITORING_NAMESPACE"
