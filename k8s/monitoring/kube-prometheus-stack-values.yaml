@@ -1,8 +1,22 @@
 defaultRules:
   rules:
+    etcd: false
+    kubeControllerManager: false
     kubeProxy: false
+    kubePrometheusGeneral: false
+    kubeSchedulerAlerting: false
+    kubeSchedulerRecording: false
+
+kubeControllerManager:
+  enabled: false
+
+kubeEtcd:
+  enabled: false
 
 kubeProxy:
+  enabled: false
+
+kubeScheduler:
   enabled: false
 
 prometheus:
@@ -14,7 +28,7 @@ prometheus:
     ruleNamespaceSelector: {}
 
 alertmanager:
-  enabled: false
+  enabled: true
   alertmanagerSpec:
     configSecret: alertmanager-vpn-bot
 

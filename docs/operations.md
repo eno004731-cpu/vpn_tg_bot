@@ -20,6 +20,26 @@ unset ALERTMANAGER_TELEGRAM_BOT_TOKEN ALERTMANAGER_TELEGRAM_CHAT_ID
 sudo ./ops/k3s/install_monitoring_stack.sh
 ```
 
+Telegram получает только allowlist из actionable alerts:
+
+- `vpn-bot` web/worker недоступны;
+- provisioning/job queue реально сломались;
+- Postgres/Vault недоступны;
+- backup/restore-check упал;
+- pod в `CrashLoopBackOff`;
+- k3s node не ready;
+- CPU/memory/disk держатся в опасной зоне достаточно долго.
+
+Служебные и шумные kube-prometheus алерты вроде `Watchdog`, `InfoInhibitor`,
+`KubeProxyDown`, `KubeControllerManagerDown`, `KubeSchedulerDown` не отправляются в Telegram.
+Если secret уже существует, его можно пересоздать без повторного ввода токена: скрипт возьмёт
+`bot_token` и `chat_id` из текущего Kubernetes Secret и обновит только routing config.
+
+```bash
+sudo ./ops/k3s/create_alertmanager_telegram_secret.sh
+sudo ./ops/k3s/install_monitoring_stack.sh
+```
+
 Проверки:
 
 ```bash
