@@ -30,6 +30,8 @@ REJECTABLE_INVOICE_STATUSES = (
 
 @dataclass(frozen=True)
 class InvoiceView:
+    """Small read model for showing invoice data without exposing ORM objects."""
+
     id: int
     amount_rub: Decimal
     reference_code: str
@@ -39,19 +41,27 @@ class InvoiceView:
 
 @dataclass(frozen=True)
 class StarsPayload:
+    """Structured Telegram Stars payload stored in the Telegram invoice."""
+
     plan_code: str
     user_tg_id: int
 
 
 class OneTimePlanAlreadyPurchased(ValueError):
+    """Raised when a user tries to buy a one-time tariff again."""
+
     pass
 
 
 class OneTimePlanPaymentAlreadyPending(ValueError):
+    """Raised when a one-time Stars checkout reservation is still active."""
+
     pass
 
 
 def reserve_unique_amount(base_amount: Decimal, used_kopecks: set[int], seed: int) -> Decimal:
+    """Pick a transfer amount with unique kopecks among currently open invoices."""
+
     for offset in range(89):
         suffix = 11 + ((seed + offset) % 89)
         candidate = (base_amount + Decimal(suffix) / Decimal(100)).quantize(Decimal("0.01"))
@@ -63,6 +73,8 @@ def reserve_unique_amount(base_amount: Decimal, used_kopecks: set[int], seed: in
 async def create_invoice(
     session: AsyncSession, user: User, plan: PlanDefinition, payment_settings: PaymentSettings
 ) -> Invoice:
+    """Create a manual-transfer invoice and reserve a unique amount/comment pair."""
+
     now = utc_now()
     invoice = Invoice(
         user_id=user.id,
@@ -105,10 +117,14 @@ async def create_invoice(
 
 
 def build_stars_payload(plan_code: str, user_tg_id: int) -> str:
+    """Build compact payload that Telegram returns after Stars payment."""
+
     return f"stars:{plan_code}:{user_tg_id}"
 
 
 def parse_stars_payload(payload: str) -> StarsPayload:
+    """Parse and validate a Telegram Stars invoice payload."""
+
     prefix, plan_code, user_tg_id_raw = payload.split(":", maxsplit=2)
     if prefix != "stars" or not plan_code or not user_tg_id_raw.isdigit():
         raise ValueError("Некорректный payload Stars.")
@@ -116,11 +132,15 @@ def parse_stars_payload(payload: str) -> StarsPayload:
 
 
 def build_stars_reference(telegram_payment_charge_id: str) -> str:
+    """Derive a stable internal payment reference from Telegram's charge id."""
+
     digest = hashlib.sha256(telegram_payment_charge_id.encode()).hexdigest()[:24]
     return f"XTR-{digest}"
 
 
 async def user_has_paid_plan(session: AsyncSession, user_id: int, plan_code: str) -> bool:
+    """Check whether the user already has a paid invoice for a plan."""
+
     invoice_id = await session.scalar(
         select(Invoice.id)
         .where(
@@ -138,6 +158,8 @@ async def reserve_one_time_plan_purchase(
     invoice: Invoice,
     plans: Optional[Mapping[str, PlanDefinition]],
 ) -> None:
+    """Create the durable one-time purchase marker before access provisioning."""
+
     plan = _get_plan(plans, invoice.plan_code)
     if plan is None or not plan.one_time_per_user:
         return
@@ -186,6 +208,8 @@ async def reserve_one_time_stars_checkout(
     user_id: int,
     plan: PlanDefinition,
 ) -> None:
+    """Reserve a one-time Stars checkout before Telegram takes the payment."""
+
     if not plan.one_time_per_user:
         return
 
@@ -233,6 +257,8 @@ async def release_one_time_stars_checkout(
     user_id: int,
     plan_code: str,
 ) -> None:
+    """Release a temporary one-time Stars checkout reservation."""
+
     reservation = await session.scalar(
         select(OneTimePlanReservation).where(
             OneTimePlanReservation.user_id == user_id,
@@ -251,6 +277,8 @@ async def create_stars_invoice_record(
     telegram_payment_charge_id: str,
     total_stars: int,
 ) -> Invoice:
+    """Persist an idempotent internal invoice for a successful Stars payment."""
+
     reference_code = build_stars_reference(telegram_payment_charge_id)
     existing = await session.scalar(select(Invoice).where(Invoice.reference_code == reference_code))
     if existing is not None:
@@ -282,6 +310,8 @@ async def create_stars_invoice_record(
 
 
 def format_invoice_for_user(invoice: Invoice, payment_settings: PaymentSettings) -> str:
+    """Render manual payment instructions shown to the buyer."""
+
     payment_lines = []
     if payment_settings.phone:
         payment_lines.append(f"СБП по телефону: <code>{escape(payment_settings.phone)}</code>")
@@ -311,6 +341,8 @@ def format_invoice_for_user(invoice: Invoice, payment_settings: PaymentSettings)
 
 
 def format_invoice_for_admin(invoice: Invoice, user: User) -> str:
+    """Render the admin review message for a manual transfer invoice."""
+
     return "\n".join(
         [
             "<b>Новый платёж на проверку</b>",
@@ -324,11 +356,15 @@ def format_invoice_for_admin(invoice: Invoice, user: User) -> str:
 
 
 def mark_invoice_pending_review(invoice: Invoice) -> None:
+    """Move an open manual-transfer invoice to admin review."""
+
     if invoice.status == InvoiceStatus.awaiting_transfer.value:
         invoice.status = InvoiceStatus.pending_review.value
 
 
 def reject_invoice(invoice: Invoice, note: Optional[str] = None) -> None:
+    """Reject an invoice only while it is still safely rejectable."""
+
     if invoice.status not in REJECTABLE_INVOICE_STATUSES:
         raise ValueError("Инвойс нельзя отклонить в текущем статусе.")
     invoice.status = InvoiceStatus.rejected.value
@@ -336,11 +372,15 @@ def reject_invoice(invoice: Invoice, note: Optional[str] = None) -> None:
 
 
 def expire_open_invoice(invoice: Invoice) -> None:
+    """Expire an invoice that is still waiting for transfer confirmation."""
+
     if invoice.status in EXPIRABLE_INVOICE_STATUSES:
         invoice.status = InvoiceStatus.expired.value
 
 
 async def expire_stale_invoices(session: AsyncSession) -> int:
+    """Auto-expire unpaid invoices whose payment window has ended."""
+
     now = utc_now()
     invoices = list(
         await session.scalars(
@@ -360,6 +400,8 @@ async def expire_stale_invoices(session: AsyncSession) -> int:
 
 
 async def purge_stale_one_time_reservations(session: AsyncSession) -> int:
+    """Delete temporary Stars reservations after their checkout window expires."""
+
     now = utc_now()
     reservations = list(
         await session.scalars(select(OneTimePlanReservation).where(OneTimePlanReservation.expires_at <= now))
@@ -372,14 +414,20 @@ async def purge_stale_one_time_reservations(session: AsyncSession) -> int:
 
 
 def _get_plan(plans: Optional[Mapping[str, PlanDefinition]], plan_code: str) -> Optional[PlanDefinition]:
+    """Resolve a plan for one-time rules, including dynamic custom plan codes."""
+
     if plans is None:
         return None
     return resolve_plan(plans, plan_code)
 
 
 def _one_time_error_message() -> str:
+    """Return the user-facing message for already purchased one-time plans."""
+
     return "Этот тариф можно купить только один раз."
 
 
 def _one_time_pending_error_message() -> str:
+    """Return the user-facing message for an active one-time checkout reservation."""
+
     return "Оплата по этому тарифу уже открыта. Завершите текущую оплату или подождите 15 минут."

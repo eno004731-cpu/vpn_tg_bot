@@ -33,6 +33,8 @@ STOP_EVENT_KEY = web.AppKey("stop_event", asyncio.Event)
 
 
 def build_dispatcher() -> Dispatcher:
+    """Create the aiogram dispatcher and register all bot routers."""
+
     dispatcher = Dispatcher()
     dispatcher.include_router(admin_router)
     dispatcher.include_router(user_router)
@@ -45,6 +47,8 @@ def create_web_app(
     dispatcher: Dispatcher,
     stop_event: asyncio.Event | None = None,
 ) -> web.Application:
+    """Build the aiohttp application that receives Telegram webhook requests."""
+
     app = web.Application()
     app[APP_CONTEXT_KEY] = context
     app[BOT_KEY] = bot
@@ -58,10 +62,14 @@ def create_web_app(
 
 
 async def healthz(request: web.Request) -> web.Response:
+    """Return process liveness without checking external dependencies."""
+
     return web.json_response({"ok": True})
 
 
 async def readyz(request: web.Request) -> web.Response:
+    """Return readiness only when the process is serving and the database responds."""
+
     if request.app[STOP_EVENT_KEY].is_set():
         return web.json_response({"ok": False, "reason": "draining"}, status=503)
     context = request.app[APP_CONTEXT_KEY]
@@ -76,11 +84,15 @@ async def readyz(request: web.Request) -> web.Response:
 
 
 async def metrics(request: web.Request) -> web.Response:
+    """Render Prometheus metrics for the web component."""
+
     payload, content_type = render_metrics()
     return web.Response(body=payload, headers={"Content-Type": content_type})
 
 
 def build_webhook_url(context: AppContext) -> str:
+    """Build the public Telegram webhook URL from the configured base URL and path secret."""
+
     return (
         f"{context.settings.app.public_webhook_base_url.rstrip('/')}"
         f"/telegram/{context.settings.app.webhook_path_secret}"
@@ -88,6 +100,8 @@ def build_webhook_url(context: AppContext) -> str:
 
 
 async def configure_telegram_webhook(bot: Bot, context: AppContext) -> None:
+    """Register the webhook URL and Telegram secret token for the current deployment."""
+
     await bot.set_webhook(
         url=build_webhook_url(context),
         secret_token=context.settings.app.webhook_secret_token,
@@ -97,6 +111,8 @@ async def configure_telegram_webhook(bot: Bot, context: AppContext) -> None:
 
 
 async def telegram_webhook(request: web.Request) -> web.Response:
+    """Validate Telegram webhook security checks and pass the update into aiogram."""
+
     started_at = perf_counter()
     result = "success"
     context = request.app[APP_CONTEXT_KEY]
@@ -141,6 +157,8 @@ async def telegram_webhook(request: web.Request) -> web.Response:
 
 
 async def run_web() -> None:
+    """Run the webhook HTTP server and clean up dependencies on shutdown."""
+
     context = await create_app_context()
     if not context.settings.app.webhook_path_secret:
         await context.nodes.close()

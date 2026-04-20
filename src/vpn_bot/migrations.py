@@ -11,6 +11,8 @@ from vpn_bot.models import Invoice, Job, OneTimePlanPurchase, OneTimePlanReserva
 
 @dataclass(frozen=True)
 class MigrationSummary:
+    """Row counts copied by the SQLite-to-Postgres migration."""
+
     users: int
     invoices: int
     one_time_plan_purchases: int
@@ -20,6 +22,8 @@ class MigrationSummary:
 
 
 async def migrate_sqlite_to_postgres(sqlite_path: Path, database_url: str) -> MigrationSummary:
+    """Copy existing SQLite rows into an empty PostgreSQL database."""
+
     source_engine, source_factory = build_session_factory(sqlite_path)
     target_engine, target_factory = build_session_factory(database_url=database_url)
     await init_db(source_engine)
@@ -61,6 +65,8 @@ async def migrate_sqlite_to_postgres(sqlite_path: Path, database_url: str) -> Mi
 
 
 async def _reset_postgres_sequences(session) -> None:
+    """Move Postgres serial sequences past imported primary keys."""
+
     if session.bind is None or session.bind.url.get_backend_name() != "postgresql":
         return
     for table_name in (

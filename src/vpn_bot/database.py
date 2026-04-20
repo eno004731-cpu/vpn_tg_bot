@@ -11,6 +11,8 @@ from vpn_bot.models import Base
 
 
 def normalize_database_url(database_url: str) -> str:
+    """Convert common PostgreSQL URLs to SQLAlchemy's asyncpg dialect."""
+
     if database_url.startswith("postgresql://"):
         return "postgresql+asyncpg://" + database_url.removeprefix("postgresql://")
     if database_url.startswith("postgres://"):
@@ -19,6 +21,8 @@ def normalize_database_url(database_url: str) -> str:
 
 
 def build_engine(database_path: Optional[Path] = None, database_url: Optional[str] = None) -> AsyncEngine:
+    """Create the async SQLAlchemy engine for Postgres or local SQLite."""
+
     if database_url:
         return create_async_engine(normalize_database_url(database_url), future=True)
     if database_path is None:
@@ -31,15 +35,21 @@ def build_session_factory(
     database_path: Optional[Path] = None,
     database_url: Optional[str] = None,
 ) -> tuple[AsyncEngine, async_sessionmaker[AsyncSession]]:
+    """Create an engine and session factory with non-expiring ORM objects."""
+
     engine = build_engine(database_path, database_url)
     return engine, async_sessionmaker(engine, expire_on_commit=False)
 
 
 def build_session_factory_from_settings(settings: AppSettings) -> tuple[AsyncEngine, async_sessionmaker[AsyncSession]]:
+    """Build database dependencies from loaded application settings."""
+
     return build_session_factory(settings.database_path, settings.database_url)
 
 
 async def init_db(engine: AsyncEngine) -> None:
+    """Create tables and apply lightweight compatibility schema updates."""
+
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         backend = engine.url.get_backend_name()
@@ -50,6 +60,8 @@ async def init_db(engine: AsyncEngine) -> None:
 
 
 async def _ensure_sqlite_schema(conn) -> None:
+    """Add columns that older SQLite deployments may still be missing."""
+
     existing_columns = {row[1] for row in (await conn.execute(text("PRAGMA table_info(subscriptions)"))).fetchall()}
     missing_columns = {
         "daily_traffic_date": "ALTER TABLE subscriptions ADD COLUMN daily_traffic_date VARCHAR(10)",
@@ -66,6 +78,8 @@ async def _ensure_sqlite_schema(conn) -> None:
 
 
 async def _ensure_postgres_schema(conn) -> None:
+    """Add columns and widen encrypted fields for older PostgreSQL deployments."""
+
     result = await conn.execute(
         text(
             """

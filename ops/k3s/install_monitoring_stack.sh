@@ -15,6 +15,41 @@ fi
 K3S_BIN=(k3s)
 export KUBECONFIG="${KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}"
 
+wait_for_statefulsets() {
+  local selector="$1"
+  local description="$2"
+  local timeout="$3"
+  local deadline
+  local statefulsets
+
+  deadline=$((SECONDS + 180))
+  while true; do
+    statefulsets="$("${K3S_BIN[@]}" kubectl get statefulset \
+      -n "$MONITORING_NAMESPACE" \
+      -l "$selector" \
+      -o name 2>/dev/null || true)"
+
+    if [ -n "$statefulsets" ]; then
+      break
+    fi
+
+    if [ "$SECONDS" -ge "$deadline" ]; then
+      echo "Timed out waiting for $description statefulset to be created" >&2
+      "${K3S_BIN[@]}" kubectl get pods,statefulset -n "$MONITORING_NAMESPACE" >&2 || true
+      exit 1
+    fi
+
+    sleep 5
+  done
+
+  while IFS= read -r statefulset; do
+    [ -z "$statefulset" ] && continue
+    "${K3S_BIN[@]}" kubectl rollout status "$statefulset" \
+      -n "$MONITORING_NAMESPACE" \
+      --timeout="$timeout"
+  done <<<"$statefulsets"
+}
+
 if ! command -v helm >/dev/null 2>&1; then
   echo "helm is required. Install Helm first, then rerun this script." >&2
   exit 1
@@ -40,11 +75,7 @@ helm upgrade --install kube-prometheus-stack prometheus-community/kube-prometheu
   -f "$VALUES_FILE"
 
 "${K3S_BIN[@]}" kubectl apply -k "$APP_DIR/k8s/monitoring"
-"${K3S_BIN[@]}" kubectl rollout status statefulset/alertmanager-kube-prometheus-stack-alertmanager \
-  -n "$MONITORING_NAMESPACE" \
-  --timeout=180s
-"${K3S_BIN[@]}" kubectl rollout status statefulset/prometheus-kube-prometheus-stack-prometheus \
-  -n "$MONITORING_NAMESPACE" \
-  --timeout=300s
+wait_for_statefulsets "app.kubernetes.io/name=alertmanager" "Alertmanager" "180s"
+wait_for_statefulsets "app.kubernetes.io/name=prometheus" "Prometheus" "300s"
 
 echo "Monitoring stack is installed and vpn-bot alert rules are applied"

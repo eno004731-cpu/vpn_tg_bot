@@ -35,15 +35,21 @@ MAX_JOB_ATTEMPTS = 10
 
 @dataclass(frozen=True)
 class ProvisioningResult:
+    """Objects produced after a provisioning job creates or reuses access."""
+
     invoice: Invoice
     subscription: Subscription
 
 
 def _json_dumps(payload: dict[str, Any]) -> str:
+    """Serialize job payloads deterministically for stable storage/debugging."""
+
     return json.dumps(payload, ensure_ascii=True, sort_keys=True)
 
 
 def _json_loads(payload: Optional[str]) -> dict[str, Any]:
+    """Deserialize a job payload, treating empty payloads as an empty object."""
+
     if not payload:
         return {}
     return json.loads(payload)
@@ -60,6 +66,8 @@ async def create_job_once(
     user_id: Optional[int] = None,
     run_after: Optional[datetime] = None,
 ) -> Job:
+    """Create a queue job idempotently by its unique idempotency key."""
+
     existing = await session.scalar(select(Job).where(Job.idempotency_key == idempotency_key))
     if existing is not None:
         return existing
@@ -93,6 +101,8 @@ async def schedule_invoice_provisioning(
     invoice_id: int,
     plans: Optional[Mapping[str, PlanDefinition]] = None,
 ) -> Job:
+    """Mark an invoice as paid and enqueue access provisioning or resend job."""
+
     invoice = await session.scalar(select(Invoice).options(selectinload(Invoice.user)).where(Invoice.id == invoice_id))
     if invoice is None:
         raise ValueError("Инвойс не найден.")
@@ -153,6 +163,8 @@ async def schedule_invoice_provisioning(
 
 
 async def claim_next_job(session: AsyncSession) -> Optional[Job]:
+    """Lease one pending or stale-running job for the current worker."""
+
     now = utc_now()
     stale_before = now - timedelta(minutes=10)
     statement = (
@@ -182,6 +194,8 @@ async def claim_next_job(session: AsyncSession) -> Optional[Job]:
 
 
 async def refresh_job_metrics(session: AsyncSession) -> None:
+    """Publish queue depth metrics grouped by job status."""
+
     counts = {status: 0 for status in (JobStatus.pending.value, JobStatus.running.value, JobStatus.failed.value)}
     result = await session.execute(select(Job.status, func.count(Job.id)).group_by(Job.status))
     for status, count in result.all():
@@ -201,6 +215,8 @@ async def process_one_job(
     bot: Bot,
     plans: Optional[Mapping[str, PlanDefinition]] = None,
 ) -> bool:
+    """Claim and execute a single job, returning False when the queue is empty."""
+
     job = await claim_next_job(session)
     if job is None:
         return False
@@ -236,6 +252,8 @@ async def provision_access_for_job(
     job: Job,
     plans: Optional[Mapping[str, PlanDefinition]] = None,
 ) -> ProvisioningResult:
+    """Create the VPN profile and subscription record for a paid invoice."""
+
     payload = _json_loads(job.payload)
     invoice_id = int(payload.get("invoice_id") or job.invoice_id)
     invoice = await session.scalar(select(Invoice).options(selectinload(Invoice.user)).where(Invoice.id == invoice_id))
@@ -316,6 +334,8 @@ async def send_access_message_for_job(
     bot: Bot,
     job: Job,
 ) -> None:
+    """Send the VPN access URL to the user once and mark it as delivered."""
+
     payload = _json_loads(job.payload)
     subscription_id = int(payload.get("subscription_id") or job.subscription_id)
     subscription = await session.scalar(
@@ -347,6 +367,8 @@ async def mark_job_failed_or_retry(
     job: Job,
     exc: Exception,
 ) -> None:
+    """Apply retry backoff or move the job to failed after max attempts."""
+
     job.last_error = str(exc)
     job.locked_at = None
     if job.attempts >= job.max_attempts:
@@ -366,6 +388,8 @@ async def mark_job_failed_or_retry(
 
 
 async def notify_admins_about_failed_job(settings: Settings, bot: Bot, job: Job, exc: Exception) -> None:
+    """Notify admins when a job reaches permanent failed state."""
+
     text = "\n".join(
         [
             "<b>Job failed</b>",
@@ -384,6 +408,8 @@ async def notify_admins_about_failed_job(settings: Settings, bot: Bot, job: Job,
 
 
 async def _ensure_xui_client(panel, inbound_id: int, **kwargs) -> ProvisionedClient:
+    """Return an existing 3x-ui client when possible, otherwise create it."""
+
     try:
         inbound = await panel.get_inbound(inbound_id)
         try:

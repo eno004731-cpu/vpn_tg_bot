@@ -12,6 +12,8 @@ from vpn_bot.web import run_web
 
 
 async def init_db_command() -> None:
+    """CLI command that creates or updates database tables."""
+
     settings = load_settings()
     engine, _ = build_session_factory_from_settings(settings.app)
     try:
@@ -21,6 +23,8 @@ async def init_db_command() -> None:
 
 
 async def migrate_sqlite_to_postgres_command(sqlite_path: str, database_url: str) -> None:
+    """CLI command that copies all bot data from SQLite into PostgreSQL."""
+
     summary = await migrate_sqlite_to_postgres(Path(sqlite_path), database_url)
     print(  # noqa: T201
         "Migrated "
@@ -34,6 +38,8 @@ async def migrate_sqlite_to_postgres_command(sqlite_path: str, database_url: str
 
 
 def build_parser() -> argparse.ArgumentParser:
+    """Build the vpn_bot command-line parser and subcommands."""
+
     parser = argparse.ArgumentParser(description="VPN subscription bot")
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("run", help="Run Telegram bot with polling")
@@ -47,6 +53,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> None:
+    """Dispatch the selected CLI subcommand."""
+
     parser = build_parser()
     args = parser.parse_args()
     if args.command == "init-db":

@@ -10,6 +10,8 @@ from vpn_bot.services.nodes import NodeRegistry
 
 @dataclass
 class AppContext:
+    """Shared runtime dependencies passed into handlers, web server, and workers."""
+
     settings: Settings
     plans: dict[str, PlanDefinition]
     engine: AsyncEngine

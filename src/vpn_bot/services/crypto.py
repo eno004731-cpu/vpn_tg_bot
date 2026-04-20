@@ -14,12 +14,16 @@ class EncryptionError(RuntimeError):
 
 
 def encrypt_value(value: Optional[str], key: Optional[str]) -> Optional[str]:
+    """Encrypt plaintext with enc:v1 prefix, leaving empty/already encrypted values intact."""
+
     if value is None or not key or value.startswith(ENCRYPTION_PREFIX):
         return value
     return ENCRYPTION_PREFIX + _fernet(key).encrypt(value.encode()).decode()
 
 
 def decrypt_value(value: Optional[str], key: Optional[str]) -> Optional[str]:
+    """Decrypt enc:v1 values and leave plaintext compatibility values untouched."""
+
     if value is None or not value.startswith(ENCRYPTION_PREFIX):
         return value
     if not key:
@@ -32,6 +36,8 @@ def decrypt_value(value: Optional[str], key: Optional[str]) -> Optional[str]:
 
 
 def _fernet(key: str) -> Fernet:
+    """Build a Fernet instance from a Fernet key or derive one from passphrase text."""
+
     raw = key.strip().encode()
     try:
         return Fernet(raw)

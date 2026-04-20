@@ -66,6 +66,8 @@ OPEN_INVOICE_STATUSES = (
 
 
 async def _answer_callback(callback: CallbackQuery, text: str = "", *, show_alert: bool = False) -> None:
+    """Answer admin callback queries without failing on expired Telegram callback ids."""
+
     try:
         await callback.answer(text, show_alert=show_alert)
     except TelegramBadRequest:
@@ -73,12 +75,16 @@ async def _answer_callback(callback: CallbackQuery, text: str = "", *, show_aler
 
 
 def _is_admin(message_or_callback: Union[Message, CallbackQuery], admin_ids: tuple[int, ...]) -> bool:
+    """Check whether the Telegram sender is configured as a bot admin."""
+
     user = message_or_callback.from_user
     return user is not None and user.id in admin_ids
 
 
 @router.message(Command("admin"))
 async def admin_dashboard(message: Message, command: CommandObject, app_context: AppContext) -> None:
+    """Entry point for admin dashboard and subcommands like invoices/nodes/users."""
+
     if not _is_admin(message, app_context.settings.app.admin_ids):
         return
     admin_args = (command.args or "").strip().lower()
@@ -113,6 +119,8 @@ async def admin_dashboard(message: Message, command: CommandObject, app_context:
 
 @router.message(Command("users"))
 async def users_command(message: Message, command: CommandObject, app_context: AppContext) -> None:
+    """Show the admin user list, optionally filtered by command argument."""
+
     if not _is_admin(message, app_context.settings.app.admin_ids):
         return
     query = (command.args or "").strip() or None
@@ -121,6 +129,8 @@ async def users_command(message: Message, command: CommandObject, app_context: A
 
 @router.message(Command("invoices"))
 async def invoices_command(message: Message, app_context: AppContext) -> None:
+    """Show invoices that still need payment review or provisioning attention."""
+
     if not _is_admin(message, app_context.settings.app.admin_ids):
         return
     await _send_open_invoices(message, app_context, page=0)
@@ -128,6 +138,8 @@ async def invoices_command(message: Message, app_context: AppContext) -> None:
 
 @router.message(Command("nodes"))
 async def nodes_command(message: Message, app_context: AppContext) -> None:
+    """Show configured VPN node health and active subscription counts."""
+
     if not _is_admin(message, app_context.settings.app.admin_ids):
         return
     await _send_nodes_report(message, app_context)
@@ -135,6 +147,8 @@ async def nodes_command(message: Message, app_context: AppContext) -> None:
 
 @router.message(Command("traffic_admin"))
 async def traffic_admin(message: Message, app_context: AppContext) -> None:
+    """Force traffic synchronization and show an admin traffic report."""
+
     if not _is_admin(message, app_context.settings.app.admin_ids):
         return
     async with app_context.session_factory() as session:
@@ -148,6 +162,8 @@ async def traffic_admin(message: Message, app_context: AppContext) -> None:
 
 @router.callback_query(AdminInvoicesPage.filter())
 async def invoices_page(callback: CallbackQuery, callback_data: AdminInvoicesPage, app_context: AppContext) -> None:
+    """Handle pagination in the admin invoice list."""
+
     if not _is_admin(callback, app_context.settings.app.admin_ids):
         await callback.answer("Недостаточно прав.", show_alert=True)
         return
@@ -157,6 +173,8 @@ async def invoices_page(callback: CallbackQuery, callback_data: AdminInvoicesPag
 
 @router.callback_query(AdminUsersPage.filter())
 async def users_page(callback: CallbackQuery, callback_data: AdminUsersPage, app_context: AppContext) -> None:
+    """Handle pagination in the admin user list."""
+
     if not _is_admin(callback, app_context.settings.app.admin_ids):
         await callback.answer("Недостаточно прав.", show_alert=True)
         return
@@ -166,6 +184,8 @@ async def users_page(callback: CallbackQuery, callback_data: AdminUsersPage, app
 
 @router.callback_query(AdminUserAction.filter())
 async def user_action(callback: CallbackQuery, callback_data: AdminUserAction, app_context: AppContext) -> None:
+    """Route admin actions for viewing a user or opening the grant menu."""
+
     if not _is_admin(callback, app_context.settings.app.admin_ids):
         await callback.answer("Недостаточно прав.", show_alert=True)
         return
@@ -182,6 +202,8 @@ async def user_action(callback: CallbackQuery, callback_data: AdminUserAction, a
 
 @router.callback_query(AdminGrantPlan.filter())
 async def grant_plan(callback: CallbackQuery, callback_data: AdminGrantPlan, app_context: AppContext) -> None:
+    """Grant a configured static plan to a user from the admin UI."""
+
     if not _is_admin(callback, app_context.settings.app.admin_ids):
         await callback.answer("Недостаточно прав.", show_alert=True)
         return
@@ -197,6 +219,8 @@ async def grant_plan(callback: CallbackQuery, callback_data: AdminGrantPlan, app
 async def custom_grant_action(
     callback: CallbackQuery, callback_data: AdminCustomGrantAction, app_context: AppContext
 ) -> None:
+    """Handle admin custom constructor actions and manual custom plan grants."""
+
     if not _is_admin(callback, app_context.settings.app.admin_ids):
         await _answer_callback(callback, "Недостаточно прав.", show_alert=True)
         return
@@ -253,6 +277,8 @@ async def custom_grant_action(
 async def subscription_action(
     callback: CallbackQuery, callback_data: AdminSubscriptionAction, app_context: AppContext
 ) -> None:
+    """Handle admin subscription actions such as revoking active access."""
+
     if not _is_admin(callback, app_context.settings.app.admin_ids):
         await callback.answer("Недостаточно прав.", show_alert=True)
         return
@@ -285,6 +311,8 @@ async def subscription_action(
 
 @router.callback_query(AdminInvoiceAction.filter())
 async def invoice_review(callback: CallbackQuery, callback_data: AdminInvoiceAction, app_context: AppContext) -> None:
+    """Approve or reject an invoice from inline admin review buttons."""
+
     if not _is_admin(callback, app_context.settings.app.admin_ids):
         await callback.answer("Недостаточно прав.", show_alert=True)
         return
@@ -301,6 +329,8 @@ async def invoice_review(callback: CallbackQuery, callback_data: AdminInvoiceAct
 
 @router.message(Command("approve"))
 async def approve_command(message: Message, command: CommandObject, app_context: AppContext) -> None:
+    """Approve an invoice by id from a text admin command."""
+
     if not _is_admin(message, app_context.settings.app.admin_ids):
         return
     if not command.args or not command.args.strip().isdigit():
@@ -311,6 +341,8 @@ async def approve_command(message: Message, command: CommandObject, app_context:
 
 @router.message(Command("reject"))
 async def reject_command(message: Message, command: CommandObject, app_context: AppContext) -> None:
+    """Reject an invoice by id from a text admin command, optionally with note."""
+
     if not _is_admin(message, app_context.settings.app.admin_ids):
         return
     if not command.args:
@@ -325,6 +357,8 @@ async def reject_command(message: Message, command: CommandObject, app_context: 
 
 
 async def _approve_invoice(target: Union[Message, CallbackQuery], invoice_id: int, app_context: AppContext) -> None:
+    """Queue access provisioning for an approved invoice and notify the admin."""
+
     async with app_context.session_factory() as session:
         try:
             await schedule_invoice_provisioning(
@@ -363,6 +397,8 @@ async def _reject_invoice(
     app_context: AppContext,
     note: Optional[str],
 ) -> None:
+    """Reject an invoice safely and update the command/callback target."""
+
     async with app_context.session_factory() as session:
         invoice = await session.scalar(select(Invoice).where(Invoice.id == invoice_id))
         if invoice is None:
@@ -393,6 +429,8 @@ async def _send_open_invoices(
     *,
     page: int = 0,
 ) -> None:
+    """Load and render one page of open invoices for admins."""
+
     page = max(page, 0)
     async with app_context.session_factory() as session:
         total = await session.scalar(
@@ -417,12 +455,16 @@ async def _send_open_invoices(
 
 
 async def _send_nodes_report(message: Message, app_context: AppContext) -> None:
+    """Collect node statuses and send the admin /nodes report."""
+
     async with app_context.session_factory() as session:
         statuses = await app_context.nodes.collect_statuses(session)
     await message.answer(format_admin_nodes_report(statuses))
 
 
 def _format_open_invoices_page(invoices: list[Invoice], *, page: int, total: int) -> str:
+    """Render the paginated open-invoice list."""
+
     lines = [
         "<b>Неоплаченные инвойсы</b>",
         f"Всего: <code>{total}</code>",
@@ -439,6 +481,8 @@ def _format_open_invoices_page(invoices: list[Invoice], *, page: int, total: int
 
 
 def _format_open_invoice_line(invoice: Invoice) -> str:
+    """Render one compact invoice row for the admin invoice list."""
+
     user = invoice.user
     if user is None:
         user_label = "-"
@@ -460,6 +504,8 @@ async def _send_users_list(
     page: int = 0,
     query: Optional[str] = None,
 ) -> None:
+    """Load and render a paginated or searched admin user list."""
+
     page = max(page, 0)
     condition = _build_user_search_condition(query)
 
@@ -496,6 +542,8 @@ async def _show_user_detail(
     user_id: int,
     page: int,
 ) -> None:
+    """Show one user's subscriptions and available admin actions."""
+
     async with app_context.session_factory() as session:
         user = await session.scalar(select(User).where(User.id == user_id).options(selectinload(User.subscriptions)))
     if user is None:
@@ -519,6 +567,8 @@ async def _show_grant_plan_menu(
     user_id: int,
     page: int,
 ) -> None:
+    """Show the tariff list used by admins to grant access manually."""
+
     async with app_context.session_factory() as session:
         user = await session.scalar(select(User).where(User.id == user_id))
     if user is None:
@@ -539,6 +589,8 @@ async def _grant_access_with_plan(
     plan,
     app_context: AppContext,
 ) -> None:
+    """Provision a selected plan for a user and send the access link."""
+
     async with app_context.session_factory() as session:
         user = await session.scalar(select(User).where(User.id == user_id))
         if user is None:
@@ -578,6 +630,8 @@ async def _grant_access_with_plan(
 
 
 def _apply_custom_plan_action(action: str, days: int, devices: int) -> tuple[int, int]:
+    """Apply one admin custom-constructor action to days/devices."""
+
     days = clamp_custom_days(days)
     devices = clamp_custom_devices(devices)
     if action in {"show", "grant"}:
@@ -602,6 +656,8 @@ def _apply_custom_plan_action(action: str, days: int, devices: int) -> tuple[int
 
 
 def _custom_plan_noop_message(action: str, days: int, devices: int) -> str:
+    """Return a helpful admin callback hint when constructor state is unchanged."""
+
     if action.startswith("dp"):
         return f"Уже максимум: {days} дней."
     if action.startswith("dm"):
@@ -616,10 +672,14 @@ def _custom_plan_noop_message(action: str, days: int, devices: int) -> str:
 
 
 def _is_message_not_modified(exc: TelegramBadRequest) -> bool:
+    """Detect Telegram's harmless 'message is not modified' edit error."""
+
     return "message is not modified" in str(exc).lower()
 
 
 def _build_user_search_condition(query: Optional[str]):
+    """Build SQLAlchemy search condition for id, tg_id, username, or full name."""
+
     if not query:
         return None
     normalized = query.strip().lstrip("@")
@@ -636,6 +696,8 @@ def _build_user_search_condition(query: Optional[str]):
 
 
 def _format_users_page_title(page: int, total: int, query: Optional[str]) -> str:
+    """Render the title block for the admin user list."""
+
     lines = [
         "<b>Пользователи</b>",
         f"Всего: <code>{total}</code>",
@@ -647,6 +709,8 @@ def _format_users_page_title(page: int, total: int, query: Optional[str]) -> str
 
 
 def _format_user_button_label(user: User) -> str:
+    """Render one user button with active count and total traffic."""
+
     active = [item for item in user.subscriptions if item.status == SubscriptionStatus.active.value]
     traffic_used = sum(item.traffic_used_bytes for item in active)
     name = _plain_user_name(user)
@@ -654,6 +718,8 @@ def _format_user_button_label(user: User) -> str:
 
 
 def _format_user_detail(user: User) -> str:
+    """Render detailed admin view of a user and recent subscriptions."""
+
     subscriptions = sorted(user.subscriptions, key=lambda item: item.id, reverse=True)
     active = [item for item in subscriptions if item.status == SubscriptionStatus.active.value]
     lines = [
@@ -683,6 +749,8 @@ def _format_user_detail(user: User) -> str:
 
 
 def _plain_user_name(user: User) -> str:
+    """Return a short unescaped name for compact admin lists."""
+
     if user.username:
         value = f"@{user.username}"
     elif user.full_name:
@@ -693,10 +761,14 @@ def _plain_user_name(user: User) -> str:
 
 
 def _format_user_name(user: User) -> str:
+    """Return a short HTML-escaped user name for Telegram messages."""
+
     return escape(_plain_user_name(user))
 
 
 async def _send_or_edit(target: Union[Message, CallbackQuery], text: str, keyboard) -> None:
+    """Send a new message or edit the callback message depending on target type."""
+
     if isinstance(target, CallbackQuery):
         await target.message.edit_text(text, reply_markup=keyboard)
     else:
@@ -704,6 +776,8 @@ async def _send_or_edit(target: Union[Message, CallbackQuery], text: str, keyboa
 
 
 async def _safe_send_message(bot, chat_id: int, text: str) -> None:
+    """Send a Telegram message and log failures without breaking admin flow."""
+
     try:
         await bot.send_message(chat_id, text)
     except TelegramAPIError:

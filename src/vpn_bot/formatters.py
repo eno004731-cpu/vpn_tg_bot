@@ -10,16 +10,22 @@ from vpn_bot.utils import ensure_utc, format_bytes
 
 
 def format_traffic_limit(limit_bytes: int) -> str:
+    """Render a traffic limit, treating zero as unlimited."""
+
     if limit_bytes <= 0:
         return "Безлимит"
     return format_bytes(limit_bytes)
 
 
 def format_traffic_usage(used_bytes: int, limit_bytes: int) -> str:
+    """Render used traffic together with the plan limit."""
+
     return f"{format_bytes(used_bytes)} / {format_traffic_limit(limit_bytes)}"
 
 
 def format_user_subscriptions(subscriptions: Iterable[Subscription], field_encryption_key: Optional[str] = None) -> str:
+    """Render active subscriptions for the /my user command."""
+
     parts: list[str] = []
     for subscription in subscriptions:
         traffic_usage = format_traffic_usage(subscription.traffic_used_bytes, subscription.traffic_limit_bytes)
@@ -40,6 +46,8 @@ def format_user_subscriptions(subscriptions: Iterable[Subscription], field_encry
 
 
 def format_admin_traffic_report(subscriptions: Iterable[Subscription]) -> str:
+    """Render active subscriptions ordered by traffic usage for admins."""
+
     lines = ["<b>Активные подписки и трафик</b>"]
     ordered = sorted(subscriptions, key=lambda item: item.traffic_used_bytes, reverse=True)
     if not ordered:
@@ -58,6 +66,8 @@ def format_admin_traffic_report(subscriptions: Iterable[Subscription]) -> str:
 
 
 def format_admin_dashboard(pending_invoices: int, active_subscriptions: int) -> str:
+    """Render the compact admin dashboard summary."""
+
     return "\n".join(
         [
             "<b>Админ-панель</b>",
@@ -70,6 +80,8 @@ def format_admin_dashboard(pending_invoices: int, active_subscriptions: int) -> 
 
 
 def format_admin_help() -> str:
+    """Render the admin command reference."""
+
     return "\n".join(
         [
             "<b>Админ-команды</b>",
@@ -91,12 +103,16 @@ def format_admin_help() -> str:
 
 
 def format_invoice_rejection(invoice: Invoice, note: Optional[str]) -> str:
+    """Render a rejection confirmation for admin command/callback output."""
+
     if note:
         return f"Инвойс <code>{invoice.id}</code> отклонён. Причина: {escape(note)}"
     return f"Инвойс <code>{invoice.id}</code> отклонён."
 
 
 def format_admin_nodes_report(statuses: Iterable[NodeStatus]) -> str:
+    """Render VPN node health and load information for admins."""
+
     ordered = sorted(statuses, key=lambda item: item.node.node_code)
     lines = ["<b>VPN-ноды</b>"]
     if not ordered:
@@ -120,6 +136,8 @@ def format_admin_nodes_report(statuses: Iterable[NodeStatus]) -> str:
 
 
 def format_user_tag(user: User) -> str:
+    """Return the preferred short Telegram identifier for a user."""
+
     if user.username:
         return f"@{user.username}"
     return str(user.tg_id)

@@ -19,15 +19,21 @@ from vpn_bot.services.custom_plans import (
 
 
 class PlanChoice(CallbackData, prefix="plan"):
+    """Callback payload for choosing a concrete tariff."""
+
     code: str
 
 
 class PaymentMethodChoice(CallbackData, prefix="pay_method"):
+    """Callback payload for choosing transfer or Stars payment."""
+
     code: str
     method: str
 
 
 class CustomPlanAction(CallbackData, prefix="cp"):
+    """Callback payload for the user-facing custom tariff constructor."""
+
     kind: str
     days: int
     devices: int
@@ -35,34 +41,48 @@ class CustomPlanAction(CallbackData, prefix="cp"):
 
 
 class UserNavigationAction(CallbackData, prefix="user_nav"):
+    """Callback payload for simple user-menu navigation actions."""
+
     action: str
 
 
 class InvoiceAction(CallbackData, prefix="invoice"):
+    """Callback payload for user actions on an invoice."""
+
     action: str
     invoice_id: int
 
 
 class AdminInvoiceAction(CallbackData, prefix="admin_invoice"):
+    """Callback payload for admin invoice moderation actions."""
+
     action: str
     invoice_id: int
 
 
 class AdminUsersPage(CallbackData, prefix="aup"):
+    """Callback payload for admin user-list pagination."""
+
     page: int
 
 
 class AdminInvoicesPage(CallbackData, prefix="aip"):
+    """Callback payload for admin invoice-list pagination."""
+
     page: int
 
 
 class AdminUserAction(CallbackData, prefix="au"):
+    """Callback payload for admin actions on one user."""
+
     action: str
     user_id: int
     page: int
 
 
 class AdminSubscriptionAction(CallbackData, prefix="asub"):
+    """Callback payload for admin actions on one subscription."""
+
     action: str
     subscription_id: int
     user_id: int
@@ -70,12 +90,16 @@ class AdminSubscriptionAction(CallbackData, prefix="asub"):
 
 
 class AdminGrantPlan(CallbackData, prefix="ag"):
+    """Callback payload for granting a static plan from the admin UI."""
+
     user_id: int
     plan_code: str
     page: int
 
 
 class AdminCustomGrantAction(CallbackData, prefix="acg"):
+    """Callback payload for the admin custom-grant constructor."""
+
     user_id: int
     page: int
     kind: str
@@ -85,6 +109,8 @@ class AdminCustomGrantAction(CallbackData, prefix="acg"):
 
 
 def main_menu() -> ReplyKeyboardMarkup:
+    """Build the persistent bottom menu shown to regular users."""
+
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text="Купить подписку"), KeyboardButton(text="Моя подписка")],
@@ -95,7 +121,11 @@ def main_menu() -> ReplyKeyboardMarkup:
 
 
 def plans_keyboard(plans: list[PlanDefinition]) -> InlineKeyboardMarkup:
+    """Build the buy menu with custom constructors first and static plans below."""
+
     def plan_price_label(plan: PlanDefinition) -> str:
+        """Render all available payment prices for one tariff button."""
+
         prices = []
         if plan.supports_transfer:
             prices.append(f"{plan.price_rub} ₽")
@@ -140,6 +170,8 @@ def plans_keyboard(plans: list[PlanDefinition]) -> InlineKeyboardMarkup:
 
 
 def custom_plan_builder_keyboard(kind: str, days: int, devices: int) -> InlineKeyboardMarkup:
+    """Build the interactive user keyboard for changing custom days/devices."""
+
     days = clamp_custom_days(days)
     devices = clamp_custom_devices(devices)
     preset_rows = [
@@ -192,6 +224,8 @@ def custom_plan_builder_keyboard(kind: str, days: int, devices: int) -> InlineKe
 
 
 def format_custom_plan_builder(kind: str, days: int, devices: int) -> str:
+    """Render the current custom constructor state as a Telegram message."""
+
     plan = build_custom_plan(kind, days, devices)
     lines = [
         f"<b>{plan.title}</b>",
@@ -209,6 +243,8 @@ def format_custom_plan_builder(kind: str, days: int, devices: int) -> str:
 
 
 def _custom_plan_button(kind: str, days: int, devices: int, text: str, action: str) -> InlineKeyboardButton:
+    """Create one custom constructor adjustment button."""
+
     return InlineKeyboardButton(
         text=text,
         callback_data=CustomPlanAction(kind=kind, days=days, devices=devices, action=action).pack(),
@@ -216,6 +252,8 @@ def _custom_plan_button(kind: str, days: int, devices: int, text: str, action: s
 
 
 def payment_methods_keyboard(plan: PlanDefinition) -> InlineKeyboardMarkup:
+    """Build payment method buttons for a selected tariff."""
+
     rows = []
     if plan.supports_transfer:
         rows.append(
@@ -247,6 +285,8 @@ def payment_methods_keyboard(plan: PlanDefinition) -> InlineKeyboardMarkup:
 
 
 def invoice_keyboard(invoice_id: int) -> InlineKeyboardMarkup:
+    """Build the user button for sending a manual-transfer invoice to review."""
+
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -260,6 +300,8 @@ def invoice_keyboard(invoice_id: int) -> InlineKeyboardMarkup:
 
 
 def admin_invoice_keyboard(invoice_id: int) -> InlineKeyboardMarkup:
+    """Build admin approve/reject buttons for one invoice."""
+
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -279,6 +321,8 @@ def admin_invoice_keyboard(invoice_id: int) -> InlineKeyboardMarkup:
 def admin_users_keyboard(
     users: list[tuple[int, str]], page: int, has_prev: bool, has_next: bool
 ) -> InlineKeyboardMarkup:
+    """Build the paginated admin user list keyboard."""
+
     rows = [
         [
             InlineKeyboardButton(
@@ -309,6 +353,8 @@ def admin_users_keyboard(
 
 
 def admin_invoices_page_keyboard(page: int, has_prev: bool, has_next: bool) -> Optional[InlineKeyboardMarkup]:
+    """Build invoice pagination controls, returning None when there are no controls."""
+
     navigation = []
     if has_prev:
         navigation.append(
@@ -334,6 +380,8 @@ def admin_user_keyboard(
     page: int,
     active_subscription_ids: list[int],
 ) -> InlineKeyboardMarkup:
+    """Build admin actions for one user, including grant and revoke buttons."""
+
     rows = [
         [
             InlineKeyboardButton(
@@ -370,6 +418,8 @@ def admin_user_keyboard(
 
 
 def admin_user_search_back_keyboard(page: int = 0) -> InlineKeyboardMarkup:
+    """Build a single back button after an admin user search."""
+
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -383,6 +433,8 @@ def admin_user_search_back_keyboard(page: int = 0) -> InlineKeyboardMarkup:
 
 
 def admin_grant_plans_keyboard(user_id: int, page: int, plans: list[PlanDefinition]) -> InlineKeyboardMarkup:
+    """Build the admin grant menu for static and custom tariffs."""
+
     rows = [
         [
             InlineKeyboardButton(
@@ -435,6 +487,8 @@ def admin_grant_plans_keyboard(user_id: int, page: int, plans: list[PlanDefiniti
 
 
 def admin_custom_grant_keyboard(kind: str, days: int, devices: int, user_id: int, page: int) -> InlineKeyboardMarkup:
+    """Build the admin custom constructor used before granting access manually."""
+
     days = clamp_custom_days(days)
     devices = clamp_custom_devices(devices)
     preset_rows = [
@@ -510,6 +564,8 @@ def admin_custom_grant_keyboard(kind: str, days: int, devices: int, user_id: int
 def _admin_custom_grant_button(
     kind: str, days: int, devices: int, user_id: int, page: int, text: str, action: str
 ) -> InlineKeyboardButton:
+    """Create one admin custom-grant adjustment button."""
+
     return InlineKeyboardButton(
         text=text,
         callback_data=AdminCustomGrantAction(

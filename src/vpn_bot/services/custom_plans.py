@@ -23,31 +23,43 @@ _CUSTOM_PLAN_RE = re.compile(r"^(custom|premium)_v1_d(\d+)_u(\d+)$")
 
 @dataclass(frozen=True)
 class CustomPlanParams:
+    """Parsed parameters from a dynamic custom plan code."""
+
     kind: str
     days: int
     devices: int
 
 
 def clamp_custom_days(days: int) -> int:
+    """Clamp the requested custom duration to the supported 1..365 day range."""
+
     return min(max(int(days), CUSTOM_PLAN_MIN_DAYS), CUSTOM_PLAN_MAX_DAYS)
 
 
 def clamp_custom_devices(devices: int) -> int:
+    """Clamp the requested device count to the supported 1..10 range."""
+
     return min(max(int(devices), CUSTOM_PLAN_MIN_DEVICES), CUSTOM_PLAN_MAX_DEVICES)
 
 
 def normalize_custom_kind(kind: str) -> str:
+    """Validate and return the custom plan kind used in callback data and plan codes."""
+
     if kind not in {CUSTOM_PLAN_KIND, PREMIUM_PLAN_KIND}:
         raise ValueError("Неизвестный тип конструктора тарифа.")
     return kind
 
 
 def build_custom_plan_code(kind: str, days: int, devices: int) -> str:
+    """Build the stable dynamic tariff code stored in invoices and subscriptions."""
+
     kind = normalize_custom_kind(kind)
     return f"{kind}_v1_d{clamp_custom_days(days)}_u{clamp_custom_devices(devices)}"
 
 
 def parse_custom_plan_code(code: str) -> Optional[CustomPlanParams]:
+    """Parse a dynamic custom tariff code, returning None for normal static plans."""
+
     match = _CUSTOM_PLAN_RE.match(code)
     if match is None:
         return None
@@ -60,6 +72,8 @@ def parse_custom_plan_code(code: str) -> Optional[CustomPlanParams]:
 
 
 def resolve_plan(plans: Mapping[str, PlanDefinition], code: str) -> Optional[PlanDefinition]:
+    """Find a static configured plan or generate a dynamic custom plan by code."""
+
     plan = plans.get(code)
     if plan is not None:
         return plan
@@ -70,6 +84,8 @@ def resolve_plan(plans: Mapping[str, PlanDefinition], code: str) -> Optional[Pla
 
 
 def build_custom_plan(kind: str, days: int, devices: int) -> PlanDefinition:
+    """Build a full PlanDefinition for the current custom constructor state."""
+
     kind = normalize_custom_kind(kind)
     days = clamp_custom_days(days)
     devices = clamp_custom_devices(devices)
@@ -79,6 +95,8 @@ def build_custom_plan(kind: str, days: int, devices: int) -> PlanDefinition:
 
 
 def custom_base_traffic_gb(days: int) -> int:
+    """Calculate traffic before the device multiplier for a limited Custom plan."""
+
     days = clamp_custom_days(days)
     if days < 7:
         return int(round(25 * (days**0.80)))
@@ -88,12 +106,16 @@ def custom_base_traffic_gb(days: int) -> int:
 
 
 def custom_traffic_gb(days: int, devices: int) -> int:
+    """Calculate total Custom traffic after applying the 1.4x per-device multiplier."""
+
     days = clamp_custom_days(days)
     devices = clamp_custom_devices(devices)
     return int(math.ceil(custom_base_traffic_gb(days) * (1.4 ** (devices - 1))))
 
 
 def custom_duration_price(days: int) -> Decimal:
+    """Calculate the base Custom price by duration before device multiplier."""
+
     days = clamp_custom_days(days)
     if days == 1:
         return Decimal("25")
@@ -111,12 +133,16 @@ def custom_duration_price(days: int) -> Decimal:
 
 
 def custom_price_rub(days: int, devices: int) -> Decimal:
+    """Calculate the final Custom price rounded up to the nearest 10 rubles."""
+
     devices = clamp_custom_devices(devices)
     price = custom_duration_price(days) * Decimal(str(1.55 ** (devices - 1)))
     return _ceil_to_10(price)
 
 
 def premium_price_rub(days: int, devices: int) -> Decimal:
+    """Calculate the final Custom Premium price for unlimited traffic."""
+
     days = clamp_custom_days(days)
     devices = clamp_custom_devices(devices)
     if days == 1:
@@ -129,6 +155,8 @@ def premium_price_rub(days: int, devices: int) -> Decimal:
 
 
 def _build_limited_custom_plan(days: int, devices: int) -> PlanDefinition:
+    """Create the limited-traffic Custom plan object used by handlers and invoices."""
+
     traffic_gb = custom_traffic_gb(days, devices)
     price = custom_price_rub(days, devices)
     return PlanDefinition(
@@ -144,6 +172,8 @@ def _build_limited_custom_plan(days: int, devices: int) -> PlanDefinition:
 
 
 def _build_premium_plan(days: int, devices: int) -> PlanDefinition:
+    """Create the unlimited Custom Premium plan object."""
+
     price = premium_price_rub(days, devices)
     return PlanDefinition(
         code=build_custom_plan_code(PREMIUM_PLAN_KIND, days, devices),
@@ -159,5 +189,7 @@ def _build_premium_plan(days: int, devices: int) -> PlanDefinition:
 
 
 def _ceil_to_10(value: Decimal) -> Decimal:
+    """Round a Decimal price up to a user-facing 10-ruble step."""
+
     rounded = (value / Decimal("10")).to_integral_value(rounding=ROUND_CEILING) * Decimal("10")
     return rounded.quantize(Decimal("0.01"))

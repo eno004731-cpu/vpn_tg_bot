@@ -10,14 +10,20 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
 def utc_now() -> datetime:
+    """Return timezone-aware UTC timestamp for SQLAlchemy defaults."""
+
     return datetime.now(timezone.utc)
 
 
 class Base(DeclarativeBase):
+    """Base class for all SQLAlchemy ORM models."""
+
     pass
 
 
 class InvoiceStatus(str, Enum):
+    """Lifecycle states for payment invoices."""
+
     awaiting_transfer = "awaiting_transfer"
     pending_review = "pending_review"
     paid_pending_provision = "paid_pending_provision"
@@ -28,17 +34,23 @@ class InvoiceStatus(str, Enum):
 
 
 class SubscriptionStatus(str, Enum):
+    """Lifecycle states for VPN subscriptions."""
+
     active = "active"
     expired = "expired"
     revoked = "revoked"
 
 
 class JobType(str, Enum):
+    """Queue job types processed by worker instances."""
+
     provision_access = "provision_access"
     send_access_message = "send_access_message"
 
 
 class JobStatus(str, Enum):
+    """Queue job states used for leasing, retrying, and completion."""
+
     pending = "pending"
     running = "running"
     succeeded = "succeeded"
@@ -46,6 +58,8 @@ class JobStatus(str, Enum):
 
 
 class User(Base):
+    """Telegram user known to the bot."""
+
     __tablename__ = "users"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -61,6 +75,8 @@ class User(Base):
 
 
 class Invoice(Base):
+    """Payment invoice for manual transfer or Telegram Stars payment."""
+
     __tablename__ = "invoices"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -84,6 +100,8 @@ class Invoice(Base):
 
 
 class OneTimePlanPurchase(Base):
+    """Durable marker that a user already consumed a one-time tariff."""
+
     __tablename__ = "one_time_plan_purchases"
     __table_args__ = (UniqueConstraint("user_id", "plan_code", name="uq_one_time_plan_user_plan"),)
 
@@ -95,6 +113,8 @@ class OneTimePlanPurchase(Base):
 
 
 class OneTimePlanReservation(Base):
+    """Temporary lock created before a one-time Stars checkout is charged."""
+
     __tablename__ = "one_time_plan_reservations"
     __table_args__ = (UniqueConstraint("user_id", "plan_code", name="uq_one_time_plan_reservation_user_plan"),)
 
@@ -106,6 +126,8 @@ class OneTimePlanReservation(Base):
 
 
 class Subscription(Base):
+    """Local record of a provisioned VPN client and its traffic counters."""
+
     __tablename__ = "subscriptions"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -137,6 +159,8 @@ class Subscription(Base):
 
 
 class Job(Base):
+    """Persistent worker queue item with retry and idempotency metadata."""
+
     __tablename__ = "jobs"
     __table_args__ = (UniqueConstraint("idempotency_key", name="uq_jobs_idempotency_key"),)
 

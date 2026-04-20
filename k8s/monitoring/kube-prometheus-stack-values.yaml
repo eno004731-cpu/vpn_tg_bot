@@ -14,7 +14,7 @@ prometheus:
     ruleNamespaceSelector: {}
 
 alertmanager:
-  enabled: true
+  enabled: false
   alertmanagerSpec:
     configSecret: alertmanager-vpn-bot
 

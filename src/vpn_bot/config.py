@@ -24,6 +24,8 @@ class ConfigError(RuntimeError):
 
 @dataclass
 class AppSettings:
+    """Application-level settings shared by polling, webhook, and worker processes."""
+
     bot_token: str
     admin_ids: Tuple[int, ...]
     database_path: Path
@@ -42,6 +44,8 @@ class AppSettings:
 
 @dataclass
 class PaymentSettings:
+    """Manual transfer payment settings shown in user invoices."""
+
     bank_name: str
     receiver_name: str
     card_number: str
@@ -52,6 +56,8 @@ class PaymentSettings:
 
 @dataclass
 class TrafficPolicySettings:
+    """Daily traffic throttling policy for active subscriptions."""
+
     enabled: bool = True
     daily_limit_gb: int = 75
     throttled_speed_kbytes_per_second: int = 1250
@@ -59,11 +65,15 @@ class TrafficPolicySettings:
 
     @property
     def daily_limit_bytes(self) -> int:
+        """Return the configured daily traffic limit in bytes."""
+
         return self.daily_limit_gb * 1024 * 1024 * 1024
 
 
 @dataclass
 class XUISettings:
+    """Connection and public-link settings for one 3x-ui VPN node."""
+
     base_url: str
     username: str
     password: str
@@ -81,11 +91,15 @@ class XUISettings:
 
     @property
     def display_name(self) -> str:
+        """Return a human-friendly node name for admin messages."""
+
         return self.name or self.node_code
 
 
 @dataclass
 class Settings:
+    """Fully loaded runtime configuration object."""
+
     app: AppSettings
     payment: PaymentSettings
     traffic_policy: TrafficPolicySettings
@@ -96,11 +110,15 @@ class Settings:
 
     @property
     def all_xui_nodes(self) -> Tuple[XUISettings, ...]:
+        """Return all configured VPN nodes, falling back to the legacy single node."""
+
         return self.xui_nodes or (self.xui,)
 
 
 @dataclass(frozen=True)
 class PlanDefinition:
+    """Static or dynamic tariff definition used by payments and provisioning."""
+
     code: str
     title: str
     price_rub: Decimal
@@ -115,24 +133,34 @@ class PlanDefinition:
 
     @property
     def traffic_limit_bytes(self) -> int:
+        """Return the total plan traffic limit in bytes; zero means unlimited."""
+
         return self.traffic_limit_gb * 1024 * 1024 * 1024
 
     @property
     def daily_limit_bytes(self) -> Optional[int]:
+        """Return the daily plan traffic limit in bytes when it is configured."""
+
         if self.daily_limit_gb is None:
             return None
         return self.daily_limit_gb * 1024 * 1024 * 1024
 
     @property
     def supports_transfer(self) -> bool:
+        """Whether this plan can be paid by manual card/SBP transfer."""
+
         return self.provision_access and self.price_rub > Decimal("0.00")
 
     @property
     def supports_stars(self) -> bool:
+        """Whether this plan can be paid by Telegram Stars."""
+
         return self.price_stars is not None and self.price_stars > 0
 
 
 def _read_toml(path: Path) -> dict[str, Any]:
+    """Read TOML from disk, returning an empty dict when the file is absent."""
+
     if not path.exists():
         return {}
     with path.open("rb") as fh:
@@ -140,6 +168,8 @@ def _read_toml(path: Path) -> dict[str, Any]:
 
 
 def _coalesce(*values: Any, default: Any = None) -> Any:
+    """Return the first non-empty value, otherwise the provided default."""
+
     for value in values:
         if value is not None and value != "":
             return value
@@ -147,11 +177,15 @@ def _coalesce(*values: Any, default: Any = None) -> Any:
 
 
 def _env_int(name: str) -> Optional[int]:
+    """Read an integer environment variable when it is set."""
+
     value = os.getenv(name)
     return int(value) if value else None
 
 
 def _env_list_of_ints(name: str) -> Optional[Tuple[int, ...]]:
+    """Read a comma-separated integer list from an environment variable."""
+
     raw = os.getenv(name)
     if not raw:
         return None
@@ -159,6 +193,8 @@ def _env_list_of_ints(name: str) -> Optional[Tuple[int, ...]]:
 
 
 def _env_bool(name: str) -> Optional[bool]:
+    """Read a boolean environment variable using common true/false spellings."""
+
     raw = os.getenv(name)
     if raw in (None, ""):
         return None
@@ -171,6 +207,8 @@ def _env_bool(name: str) -> Optional[bool]:
 
 
 def _load_legacy_xui(raw_xui: dict[str, Any]) -> XUISettings:
+    """Load the old single-node xui configuration format."""
+
     xui_base_url = _coalesce(os.getenv("VPN_BOT_XUI_BASE_URL"), raw_xui.get("base_url"))
     xui_username = _coalesce(os.getenv("VPN_BOT_XUI_USERNAME"), raw_xui.get("username"))
     xui_password = _coalesce(os.getenv("VPN_BOT_XUI_PASSWORD"), raw_xui.get("password"))
@@ -211,6 +249,8 @@ def _load_legacy_xui(raw_xui: dict[str, Any]) -> XUISettings:
 
 
 def _load_xui_node(raw_node: dict[str, Any], *, index: int) -> XUISettings:
+    """Load one entry from the modern multi-node xui.nodes configuration."""
+
     node_code = _coalesce(raw_node.get("code"), raw_node.get("node_code"))
     if not node_code:
         raise ConfigError(f"Не заполнен xui.nodes[{index}].code")
@@ -244,6 +284,8 @@ def _load_xui_node(raw_node: dict[str, Any], *, index: int) -> XUISettings:
 
 
 def _load_xui_settings(raw_xui: dict[str, Any]) -> tuple[XUISettings, Tuple[XUISettings, ...]]:
+    """Load VPN node settings and choose the default node."""
+
     raw_nodes = raw_xui.get("nodes") or []
     if not raw_nodes:
         node = _load_legacy_xui(raw_xui)
@@ -271,6 +313,8 @@ def _load_xui_settings(raw_xui: dict[str, Any]) -> tuple[XUISettings, Tuple[XUIS
 
 
 def load_settings() -> Settings:
+    """Load runtime settings from TOML and environment variable overrides."""
+
     secrets_file = Path(os.getenv("VPN_BOT_SECRETS_FILE", DEFAULT_SECRETS_FILE))
     plans_file = Path(os.getenv("VPN_BOT_PLANS_FILE", DEFAULT_PLANS_FILE))
     raw = _read_toml(secrets_file)
@@ -404,6 +448,8 @@ def load_settings() -> Settings:
 
 
 def load_plans(path: Optional[Path] = None) -> dict[str, PlanDefinition]:
+    """Load static tariff definitions from config/plans.toml."""
+
     plans_path = path or DEFAULT_PLANS_FILE
     raw = _read_toml(plans_path)
     items = raw.get("plans", [])

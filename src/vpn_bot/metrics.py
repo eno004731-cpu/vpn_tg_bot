@@ -64,33 +64,47 @@ TRAFFIC_SYNC_FAILURES_TOTAL = Counter(
 
 
 def render_metrics() -> tuple[bytes, str]:
+    """Return the current Prometheus exposition payload and content type."""
+
     return generate_latest(), CONTENT_TYPE_LATEST
 
 
 def observe_webhook_request(result: str, duration_seconds: float) -> None:
+    """Record one webhook request and its handling duration."""
+
     WEBHOOK_REQUESTS_TOTAL.labels(result=result).inc()
     WEBHOOK_REQUEST_DURATION_SECONDS.labels(result=result).observe(duration_seconds)
 
 
 def observe_webhook_rejection(reason: str) -> None:
+    """Record a rejected webhook grouped by rejection reason."""
+
     WEBHOOK_REJECTIONS_TOTAL.labels(reason=reason).inc()
 
 
 def observe_readiness_failure() -> None:
+    """Record a readiness failure caused by dependencies."""
+
     READINESS_FAILURES_TOTAL.inc()
 
 
 def observe_job_snapshot(*, pending: int, running: int, failed: int) -> None:
+    """Set queue depth gauges from the latest database snapshot."""
+
     JOB_PENDING_GAUGE.set(pending)
     JOB_RUNNING_GAUGE.set(running)
     JOB_FAILED_GAUGE.set(failed)
 
 
 def observe_job_attempt(job_type: str) -> None:
+    """Record that a worker claimed a job of the given type."""
+
     JOB_ATTEMPTS_TOTAL.labels(type=job_type).inc()
 
 
 def observe_provision_attempt(duration_seconds: float, *, success: bool) -> None:
+    """Record one provisioning attempt, its result, and duration."""
+
     PROVISION_ATTEMPTS_TOTAL.inc()
     PROVISION_DURATION_SECONDS.labels(result="success" if success else "failure").observe(duration_seconds)
     if not success:
@@ -98,8 +112,12 @@ def observe_provision_attempt(duration_seconds: float, *, success: bool) -> None
 
 
 def observe_telegram_send_failure() -> None:
+    """Record a failure while sending Telegram messages."""
+
     TELEGRAM_SEND_FAILURES_TOTAL.inc()
 
 
 def observe_traffic_sync_failure() -> None:
+    """Record a failed traffic synchronization pass."""
+
     TRAFFIC_SYNC_FAILURES_TOTAL.inc()

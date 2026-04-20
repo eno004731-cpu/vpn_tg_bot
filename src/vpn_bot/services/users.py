@@ -8,6 +8,8 @@ from vpn_bot.models import User
 
 
 async def ensure_user(session: AsyncSession, telegram_user: TelegramUser, admin_ids: tuple[int, ...]) -> User:
+    """Create or refresh a local user record from Telegram profile data."""
+
     user = await session.scalar(select(User).where(User.tg_id == telegram_user.id))
     full_name = " ".join(part for part in [telegram_user.first_name, telegram_user.last_name] if part).strip() or None
     is_admin = telegram_user.id in admin_ids

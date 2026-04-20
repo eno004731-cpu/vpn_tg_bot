@@ -64,6 +64,8 @@ router = Router(name="user")
 
 
 async def _answer_callback(callback: CallbackQuery, text: str = "", *, show_alert: bool = False) -> None:
+    """Answer callback queries without failing when Telegram says the query is too old."""
+
     try:
         await callback.answer(text, show_alert=show_alert)
     except TelegramBadRequest:
@@ -71,10 +73,14 @@ async def _answer_callback(callback: CallbackQuery, text: str = "", *, show_aler
 
 
 def _one_time_plan_error() -> str:
+    """Return the shared one-time tariff error text for user flows."""
+
     return "Этот тариф можно купить только один раз."
 
 
 async def _user_already_bought_plan(session, telegram_user, admin_ids: tuple[int, ...], plan: PlanDefinition) -> bool:
+    """Check one-time tariff ownership after ensuring the Telegram user exists locally."""
+
     user = await ensure_user(session, telegram_user, admin_ids)
     if not plan.one_time_per_user:
         return False
@@ -83,6 +89,8 @@ async def _user_already_bought_plan(session, telegram_user, admin_ids: tuple[int
 
 @router.message(CommandStart())
 async def start_handler(message: Message, app_context: AppContext) -> None:
+    """Register or update the user and show the main bot menu."""
+
     async with app_context.session_factory() as session:
         await ensure_user(session, message.from_user, app_context.settings.app.admin_ids)
         await session.commit()
@@ -95,6 +103,8 @@ async def start_handler(message: Message, app_context: AppContext) -> None:
 @router.message(Command("buy"))
 @router.message(F.text == "Купить подписку")
 async def buy_handler(message: Message, app_context: AppContext) -> None:
+    """Show available static tariffs and custom constructors."""
+
     async with app_context.session_factory() as session:
         await ensure_user(session, message.from_user, app_context.settings.app.admin_ids)
         await session.commit()
@@ -104,6 +114,8 @@ async def buy_handler(message: Message, app_context: AppContext) -> None:
 
 @router.callback_query(PlanChoice.filter())
 async def plan_selected(callback: CallbackQuery, callback_data: PlanChoice, app_context: AppContext) -> None:
+    """Handle static or dynamic plan selection and ask for payment method."""
+
     plan = resolve_plan(app_context.plans, callback_data.code)
     if plan is None:
         await _answer_callback(callback, "Тариф не найден.", show_alert=True)
@@ -121,6 +133,8 @@ async def plan_selected(callback: CallbackQuery, callback_data: PlanChoice, app_
 async def back_to_plans_selected(
     callback: CallbackQuery, callback_data: UserNavigationAction, app_context: AppContext
 ) -> None:
+    """Return the current message to the tariff list."""
+
     del callback_data
     try:
         await callback.message.edit_text(
@@ -139,6 +153,8 @@ async def back_to_plans_selected(
 async def custom_plan_selected(
     callback: CallbackQuery, callback_data: CustomPlanAction, app_context: AppContext
 ) -> None:
+    """Handle user custom-constructor changes and final custom tariff selection."""
+
     try:
         kind = _normalize_custom_kind(callback_data.kind)
         current_days = clamp_custom_days(callback_data.days)
@@ -179,6 +195,8 @@ async def custom_plan_selected(
 async def transfer_payment_selected(
     callback: CallbackQuery, callback_data: PaymentMethodChoice, app_context: AppContext
 ) -> None:
+    """Create a manual transfer invoice for the selected plan."""
+
     plan = resolve_plan(app_context.plans, callback_data.code)
     if plan is None or not plan.supports_transfer:
         await _answer_callback(callback, "Оплата переводом для этого тарифа недоступна.", show_alert=True)
@@ -203,6 +221,8 @@ async def transfer_payment_selected(
 async def stars_payment_selected(
     callback: CallbackQuery, callback_data: PaymentMethodChoice, app_context: AppContext
 ) -> None:
+    """Open a Telegram Stars invoice and reserve one-time plans before checkout."""
+
     plan = resolve_plan(app_context.plans, callback_data.code)
     if plan is None or not plan.supports_stars or plan.price_stars is None:
         await _answer_callback(callback, "Оплата Stars для этого тарифа недоступна.", show_alert=True)
@@ -258,6 +278,8 @@ async def stars_payment_selected(
 
 @router.pre_checkout_query()
 async def stars_pre_checkout(pre_checkout: PreCheckoutQuery, app_context: AppContext) -> None:
+    """Validate a Stars payment immediately before Telegram charges the user."""
+
     try:
         payload = parse_stars_payload(pre_checkout.invoice_payload)
     except ValueError:
@@ -292,6 +314,8 @@ async def stars_pre_checkout(pre_checkout: PreCheckoutQuery, app_context: AppCon
 
 @router.message(F.successful_payment)
 async def stars_successful_payment(message: Message, app_context: AppContext) -> None:
+    """Persist successful Stars payment and enqueue automatic access provisioning."""
+
     payment = message.successful_payment
     if payment is None:
         return
@@ -394,6 +418,8 @@ async def stars_successful_payment(message: Message, app_context: AppContext) ->
 
 @router.callback_query(InvoiceAction.filter(F.action == "paid"))
 async def invoice_paid(callback: CallbackQuery, callback_data: InvoiceAction, app_context: AppContext) -> None:
+    """Move a manual-transfer invoice to admin review and notify admins."""
+
     async with app_context.session_factory() as session:
         invoice = await session.scalar(select(Invoice).where(Invoice.id == callback_data.invoice_id))
         if invoice is None or callback.from_user is None:
@@ -466,6 +492,8 @@ async def invoice_paid(callback: CallbackQuery, callback_data: InvoiceAction, ap
 @router.message(Command("my"))
 @router.message(F.text == "Моя подписка")
 async def my_subscription(message: Message, app_context: AppContext) -> None:
+    """Show active subscriptions or the newest open invoice for the user."""
+
     async with app_context.session_factory() as session:
         user = await ensure_user(session, message.from_user, app_context.settings.app.admin_ids)
         subscriptions = await get_user_active_subscriptions(session, user.id)
@@ -498,6 +526,8 @@ async def my_subscription(message: Message, app_context: AppContext) -> None:
 @router.message(F.text == "Помощь")
 @router.message(Command("help"))
 async def help_handler(message: Message) -> None:
+    """Show short user help and supported payment methods."""
+
     await message.answer(
         "\n".join(
             [
@@ -513,6 +543,8 @@ async def help_handler(message: Message) -> None:
 
 
 def _format_plan_payment_choice(plan: PlanDefinition) -> str:
+    """Render the message shown before the user chooses a payment method."""
+
     lines = [f"<b>{escape(plan.title)}</b>"]
     if plan.description:
         lines.extend(["", escape(plan.description)])
@@ -523,12 +555,16 @@ def _format_plan_payment_choice(plan: PlanDefinition) -> str:
 
 
 def _normalize_custom_kind(kind: str) -> str:
+    """Validate custom constructor kind from callback data."""
+
     if kind not in {CUSTOM_PLAN_KIND, PREMIUM_PLAN_KIND}:
         raise ValueError("Некорректный тип конструктора.")
     return kind
 
 
 def _apply_custom_plan_action(action: str, days: int, devices: int) -> tuple[int, int]:
+    """Apply one constructor button action to the current days/devices values."""
+
     days = clamp_custom_days(days)
     devices = clamp_custom_devices(devices)
     if action == "show" or action == "pay":
@@ -556,6 +592,8 @@ def _apply_custom_plan_action(action: str, days: int, devices: int) -> tuple[int
 
 
 def _custom_plan_noop_message(action: str, days: int, devices: int) -> str:
+    """Return a helpful callback hint when a constructor button changes nothing."""
+
     if action.startswith("dp"):
         return f"Уже максимум: {days} дней."
     if action.startswith("dm"):
@@ -570,6 +608,8 @@ def _custom_plan_noop_message(action: str, days: int, devices: int) -> str:
 
 
 def _is_message_not_modified(exc: TelegramBadRequest) -> bool:
+    """Detect Telegram's harmless 'message is not modified' edit error."""
+
     return "message is not modified" in str(exc).lower()
 
 
@@ -579,6 +619,8 @@ async def _notify_admins_about_stars_schedule_error(
     reference_code: str,
     exc: Exception,
 ) -> None:
+    """Tell admins that a paid Stars invoice could not be queued for provisioning."""
+
     for admin_id in app_context.settings.app.admin_ids:
         try:
             await message.bot.send_message(

@@ -23,34 +23,48 @@ from vpn_bot.utils import ensure_utc, utc_now
 
 @dataclass(frozen=True)
 class ActivationResult:
+    """Result returned by the synchronous invoice activation path."""
+
     invoice: Invoice
     subscription: Subscription
     user: User
 
 
 def build_xui_email(tg_id: int, invoice_id: int, plan_code: str) -> str:
+    """Build deterministic 3x-ui email/comment for invoice-based provisioning."""
+
     return f"tg{tg_id}-{plan_code}-{invoice_id}@vpn.local".lower()
 
 
 def build_manual_xui_email(tg_id: int, plan_code: str) -> str:
+    """Build unique 3x-ui email/comment for manually granted admin access."""
+
     return f"tg{tg_id}-{plan_code}-manual-{uuid4().hex[:8]}@vpn.local".lower()
 
 
 def encrypt_subscription_field(value: str, settings: Settings) -> str:
+    """Encrypt a subscription secret field when encryption is configured."""
+
     return encrypt_value(value, settings.app.field_encryption_key) or value
 
 
 def decrypt_subscription_field(value: str, settings: Optional[Settings]) -> str:
+    """Decrypt a subscription secret field, falling back to plaintext compatibility."""
+
     if settings is None:
         return value
     return decrypt_value(value, settings.app.field_encryption_key) or value
 
 
 def get_subscription_access_url(subscription: Subscription, settings: Settings) -> str:
+    """Return the decrypted VPN access URL for user/admin messages."""
+
     return decrypt_subscription_field(subscription.access_url, settings)
 
 
 def get_plan_device_limit(plan_code: str, plans: Optional[Mapping[str, PlanDefinition]] = None) -> int:
+    """Resolve the device/IP limit for static and dynamic custom plans."""
+
     if plans is None:
         return 2
     plan = resolve_plan(plans, plan_code)
@@ -66,6 +80,8 @@ async def activate_invoice(
     invoice_id: int,
     plans: Optional[Mapping[str, PlanDefinition]] = None,
 ) -> ActivationResult:
+    """Synchronously provision access for an invoice and mark it paid."""
+
     invoice = await session.scalar(select(Invoice).options(selectinload(Invoice.user)).where(Invoice.id == invoice_id))
     if invoice is None:
         raise ValueError("Инвойс не найден.")
@@ -135,6 +151,8 @@ async def provision_subscription_for_user(
     source_invoice_id: Optional[int] = None,
     device_limit: int = 2,
 ) -> Subscription:
+    """Create VPN access directly for an admin-granted plan."""
+
     now = utc_now()
     node = await nodes.select_node_for_new_subscription(session)
     panel = nodes.get_client(node.node_code)
@@ -178,6 +196,8 @@ async def revoke_subscription(
     nodes: NodeRegistry,
     subscription_id: int,
 ) -> Subscription:
+    """Disable a live subscription in 3x-ui and mark it revoked locally."""
+
     subscription = await session.scalar(
         select(Subscription).options(selectinload(Subscription.user)).where(Subscription.id == subscription_id)
     )
@@ -207,6 +227,8 @@ async def sync_active_subscriptions(
     settings: Optional[Settings] = None,
     plans: Optional[Mapping[str, PlanDefinition]] = None,
 ) -> list[Subscription]:
+    """Refresh traffic counters, expire over-limit access, and apply daily throttling."""
+
     subscriptions = list(
         await session.scalars(
             select(Subscription)
@@ -276,6 +298,8 @@ async def _apply_daily_traffic_policy(
     node_inbound_id: Optional[int] = None,
     plan_daily_limit_bytes: Optional[int] = None,
 ) -> bool:
+    """Throttle or unthrottle a client based on today's traffic usage."""
+
     policy = settings.traffic_policy
     if not policy.enabled:
         return False
@@ -304,6 +328,8 @@ def _refresh_daily_baseline(
     snapshot: TrafficSnapshot,
     policy: TrafficPolicySettings,
 ) -> bool:
+    """Reset the per-day traffic baseline when the policy timezone date changes."""
+
     today = utc_now().astimezone(ZoneInfo(policy.timezone)).date().isoformat()
     if subscription.daily_traffic_date == today:
         return False
@@ -316,6 +342,8 @@ def _get_plan_daily_limit_bytes(
     subscription: Subscription,
     plans: Optional[Mapping[str, PlanDefinition]],
 ) -> Optional[int]:
+    """Resolve a plan-specific daily traffic limit for throttling."""
+
     if plans is None:
         return None
     plan = resolve_plan(plans, subscription.plan_code)
@@ -325,10 +353,14 @@ def _get_plan_daily_limit_bytes(
 
 
 def _traffic_limit_reached(subscription: Subscription) -> bool:
+    """Check whether a subscription has consumed its total traffic quota."""
+
     return subscription.traffic_limit_bytes > 0 and subscription.traffic_used_bytes >= subscription.traffic_limit_bytes
 
 
 async def get_user_active_subscriptions(session: AsyncSession, user_id: int) -> list[Subscription]:
+    """Return active subscriptions for the user, newest expiry first."""
+
     return list(
         await session.scalars(
             select(Subscription)
@@ -342,6 +374,8 @@ async def get_user_active_subscriptions(session: AsyncSession, user_id: int) -> 
 
 
 async def get_open_invoices_for_user(session: AsyncSession, user_id: int) -> list[Invoice]:
+    """Return invoices that still need user/admin action or provisioning retry."""
+
     now = utc_now()
     return list(
         await session.scalars(
@@ -368,6 +402,8 @@ async def get_open_invoices_for_user(session: AsyncSession, user_id: int) -> lis
 
 
 def format_subscription_lines(subscriptions: Iterable[Subscription], settings: Optional[Settings] = None) -> str:
+    """Render active subscription blocks with decrypted access links."""
+
     blocks: list[str] = []
     for item in subscriptions:
         traffic_limit = "Безлимит" if item.traffic_limit_bytes <= 0 else f"{item.traffic_limit_bytes} байт"

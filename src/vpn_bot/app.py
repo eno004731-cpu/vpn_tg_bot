@@ -22,6 +22,8 @@ from vpn_bot.services.subscriptions import sync_active_subscriptions
 
 
 async def create_app_context() -> AppContext:
+    """Load config, initialize storage, and build shared runtime dependencies."""
+
     settings = load_settings()
     plans = load_plans(settings.plans_file)
     engine, session_factory = build_session_factory_from_settings(settings.app)
@@ -38,6 +40,8 @@ async def create_app_context() -> AppContext:
 
 
 async def run_bot() -> None:
+    """Run the legacy polling bot together with sync and job background loops."""
+
     context = await create_app_context()
     stop_event = asyncio.Event()
     _install_stop_signal_handlers(stop_event)
@@ -68,6 +72,8 @@ async def run_bot() -> None:
 
 
 async def run_worker() -> None:
+    """Run the standalone worker process that handles jobs and traffic sync."""
+
     context = await create_app_context()
     stop_event = asyncio.Event()
     _install_stop_signal_handlers(stop_event)
@@ -93,6 +99,8 @@ async def run_worker() -> None:
 
 
 async def background_sync(context: AppContext, stop_event: asyncio.Event) -> None:
+    """Periodically expire old invoices, clear stale reservations, and sync traffic."""
+
     while not stop_event.is_set():
         try:
             async with context.session_factory() as session:
@@ -110,6 +118,8 @@ async def background_sync(context: AppContext, stop_event: asyncio.Event) -> Non
 
 
 async def background_jobs(context: AppContext, bot: Bot, stop_event: asyncio.Event) -> None:
+    """Process pending jobs in small batches until the worker is stopped."""
+
     while not stop_event.is_set():
         try:
             processed = 0
@@ -132,6 +142,8 @@ async def background_jobs(context: AppContext, bot: Bot, stop_event: asyncio.Eve
 
 
 async def start_worker_metrics_server(context: AppContext, stop_event: asyncio.Event) -> web.AppRunner | None:
+    """Expose worker health and Prometheus metrics on the configured internal port."""
+
     app = web.Application()
     app.router.add_get("/healthz", worker_healthz)
     app.router.add_get("/metrics", worker_metrics)
@@ -151,19 +163,27 @@ async def start_worker_metrics_server(context: AppContext, stop_event: asyncio.E
 
 
 async def worker_healthz(request: web.Request) -> web.Response:
+    """Return a simple liveness response for the worker metrics server."""
+
     return web.json_response({"ok": True})
 
 
 async def worker_metrics(request: web.Request) -> web.Response:
+    """Render Prometheus metrics for scraping by the monitoring stack."""
+
     payload, content_type = render_metrics()
     return web.Response(body=payload, headers={"Content-Type": content_type})
 
 
 async def disable_telegram_webhook_for_polling(bot: Bot) -> None:
+    """Delete Telegram webhook before polling so Telegram can deliver updates by getUpdates."""
+
     await bot.delete_webhook(drop_pending_updates=False)
 
 
 def _install_stop_signal_handlers(stop_event: asyncio.Event) -> None:
+    """Wire SIGINT/SIGTERM to the shared stop event for graceful shutdown."""
+
     loop = asyncio.get_running_loop()
     for signame in ("SIGINT", "SIGTERM"):
         signum = getattr(signal, signame, None)
@@ -174,6 +194,8 @@ def _install_stop_signal_handlers(stop_event: asyncio.Event) -> None:
 
 
 async def _sleep_until_stop(stop_event: asyncio.Event, seconds: int) -> None:
+    """Sleep for an interval but wake immediately when shutdown starts."""
+
     if seconds <= 0:
         return
     with contextlib.suppress(asyncio.TimeoutError):
