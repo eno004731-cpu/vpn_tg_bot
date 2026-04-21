@@ -127,6 +127,29 @@ async def test_list_inbounds_falls_back_to_legacy_api_path() -> None:
     await client.close()
 
 
+async def test_list_inbounds_falls_back_when_base_url_already_points_to_panel() -> None:
+    client = XUIClient(make_settings())
+    calls = []
+
+    async def fake_request(method, path, *, json_data=None, data=None):
+        calls.append((method, path))
+        if path.startswith("panel/"):
+            raise http_404(path)
+        return {"obj": []}
+
+    client._request = fake_request
+
+    assert await client.list_inbounds() == []
+    assert calls == [
+        ("GET", "panel/api/inbounds/list"),
+        ("GET", "panel/api/inbound/list"),
+        ("GET", "panel/inbound/list"),
+        ("GET", "api/inbounds/list"),
+    ]
+
+    await client.close()
+
+
 async def test_add_client_uses_modern_api_and_serializes_settings() -> None:
     client = XUIClient(make_settings())
     requests = []

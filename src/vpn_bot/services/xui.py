@@ -21,21 +21,33 @@ INBOUND_LIST_PATHS = (
     "panel/api/inbounds/list",
     "panel/api/inbound/list",
     "panel/inbound/list",
+    "api/inbounds/list",
+    "api/inbound/list",
+    "inbound/list",
 )
 ADD_CLIENT_PATHS = (
     "panel/api/inbounds/addClient",
     "panel/api/inbound/addClient",
     "panel/inbound/addClient",
+    "api/inbounds/addClient",
+    "api/inbound/addClient",
+    "inbound/addClient",
 )
 UPDATE_CLIENT_PATHS = (
     "panel/api/inbounds/updateClient/{client_id}",
     "panel/api/inbound/updateClient/{client_id}",
     "panel/inbound/updateClient/{client_id}",
+    "api/inbounds/updateClient/{client_id}",
+    "api/inbound/updateClient/{client_id}",
+    "inbound/updateClient/{client_id}",
 )
 DELETE_CLIENT_PATHS = (
     "panel/api/inbounds/{inbound_id}/delClient/{client_id}",
     "panel/api/inbound/{inbound_id}/delClient/{client_id}",
     "panel/inbound/{inbound_id}/delClient/{client_id}",
+    "api/inbounds/{inbound_id}/delClient/{client_id}",
+    "api/inbound/{inbound_id}/delClient/{client_id}",
+    "inbound/{inbound_id}/delClient/{client_id}",
 )
 
 
